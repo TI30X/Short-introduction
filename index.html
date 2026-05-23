@@ -1230,7 +1230,6 @@
         <div class="work-subtitle">Interactive classroom activity: Run Your Bank</div>
         <div class="work-subtitle">Prepared for the English presentation project - KSA</div>
         <div class="work-subtitle">Made together with Alea Wildberger</div>
-        <div class="disclaimer"><strong>Important disclaimer</strong>This game is simplified for explanation and time-restraint purposes. In reality, central banks, regulation, deposit insurance, interbank lending, and longer-term loan contracts would also shape how banks survive stress. The core idea remains: banks must balance profitability, liquidity, risk, and trust.</div>
       </div>
     </footer>
   </div>
@@ -1597,16 +1596,17 @@
     async function customerChooseBank(bank) {
       const player = myPlayer();
       if (!player) return;
+      const depositAmount = Number(player.balance || 0) + Number(player.cash || 0) || CUSTOMER_DEPOSIT;
       await playersRef.child(local.id).update({
         bank,
         cash: 0,
-        balance: Number(player.balance || CUSTOMER_DEPOSIT),
+        balance: depositAmount,
         choiceMade: true,
         lastDecision: `Deposited at ${bankNames[bank]}`,
         lastReport: `You deposited with ${bankNames[bank]}.`,
         updatedAt: firebase.database.ServerValue.TIMESTAMP
       });
-      await gameRef.child("banks").set(recomputeBanks({ ...snapshot.players, [local.id]: { ...player, bank, choiceMade: true } }, snapshot.game));
+      await gameRef.child("banks").set(recomputeBanks({ ...snapshot.players, [local.id]: { ...player, bank, cash: 0, balance: depositAmount, choiceMade: true } }, snapshot.game));
     }
 
     async function customerDecision(decision) {
@@ -1614,7 +1614,21 @@
       if (!player) return;
       const oldBank = player.bank || "";
       let updates = { choiceMade: true, updatedAt: firebase.database.ServerValue.TIMESTAMP };
-      if (decision === "withdraw") {
+      if (decision === "depositA" || decision === "depositB") {
+        const nextBank = decision === "depositA" ? "A" : "B";
+        const depositAmount = Number(player.balance || 0) + Number(player.cash || 0) || CUSTOMER_DEPOSIT;
+        updates.bank = nextBank;
+        updates.cash = 0;
+        updates.balance = depositAmount;
+        updates.lastDecision = `Deposited at ${bankNames[nextBank]}`;
+        updates.lastReport = `You joined ${bankNames[nextBank]} with ${money(depositAmount)}.`;
+      } else if (decision === "holdCash") {
+        updates.bank = "";
+        updates.cash = Number(player.cash || 0) + Number(player.balance || 0);
+        updates.balance = 0;
+        updates.lastDecision = "Kept cash";
+        updates.lastReport = "You stayed out of both banks and kept your money as cash.";
+      } else if (decision === "withdraw") {
         updates.bank = "";
         updates.cash = Number(player.cash || 0) + Number(player.balance || 0);
         updates.balance = 0;
@@ -2143,6 +2157,17 @@
 
       if (game.phase === "decision") {
         const other = player.bank === "A" ? "B" : "A";
+        const actionButtons = player.bank
+          ? `
+              <button class="button bank-b ${player.lastDecision?.startsWith("Stayed") ? "selected" : ""}" data-decision="stay" ${player.choiceMade ? "disabled" : ""}>Stay</button>
+              <button class="button bank-a ${player.lastDecision?.startsWith("Switched") ? "selected" : ""}" data-decision="switch" ${player.choiceMade ? "disabled" : ""}>Switch to ${bankNames[other] || "a bank"}</button>
+              <button class="button danger ${player.lastDecision?.startsWith("Withdrew") ? "selected" : ""}" data-decision="withdraw" ${player.choiceMade ? "disabled" : ""}>Withdraw all</button>
+            `
+          : `
+              <button class="button bank-a ${player.lastDecision?.includes("Bank A") ? "selected" : ""}" data-decision="depositA" ${player.choiceMade ? "disabled" : ""}>Deposit at Bank A</button>
+              <button class="button bank-b ${player.lastDecision?.includes("Bank B") ? "selected" : ""}" data-decision="depositB" ${player.choiceMade ? "disabled" : ""}>Deposit at Bank B</button>
+              <button class="button secondary ${player.lastDecision?.startsWith("Kept") ? "selected" : ""}" data-decision="holdCash" ${player.choiceMade ? "disabled" : ""}>Keep cash</button>
+            `;
         els.playerContent.innerHTML = `
           <div class="grid">
             <div class="notice ${game.rumour ? "warning" : ""}">${player.lastReport || "Review your bank's result."}</div>
@@ -2157,9 +2182,7 @@
               <div class="metric danger"><span>Still owed to you</span><strong>${money(player.owed || 0)}</strong></div>
             </div>
             <div class="grid three">
-              <button class="button bank-b ${player.lastDecision?.startsWith("Stayed") ? "selected" : ""}" data-decision="stay" ${!player.bank || player.choiceMade ? "disabled" : ""}>Stay</button>
-              <button class="button bank-a ${player.lastDecision?.startsWith("Switched") ? "selected" : ""}" data-decision="switch" ${!player.bank || player.choiceMade ? "disabled" : ""}>Switch to ${bankNames[other] || "a bank"}</button>
-              <button class="button danger ${player.lastDecision?.startsWith("Withdrew") ? "selected" : ""}" data-decision="withdraw" ${player.choiceMade ? "disabled" : ""}>Withdraw all</button>
+              ${actionButtons}
             </div>
           </div>
           ${rumourModal(player, game)}
