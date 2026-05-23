@@ -568,6 +568,39 @@
       font-size: 1.15rem;
     }
 
+    .rumour-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background: rgba(30, 39, 97, 0.62);
+    }
+
+    .rumour-box {
+      width: min(420px, 100%);
+      padding: 22px;
+      border: 2px solid var(--red);
+      border-radius: var(--radius);
+      background: white;
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+      text-align: center;
+    }
+
+    .warning-symbol {
+      display: grid;
+      width: 82px;
+      height: 82px;
+      place-items: center;
+      margin: 0 auto 14px;
+      clip-path: polygon(50% 4%, 98% 92%, 2% 92%);
+      background: var(--amber);
+      color: #241700;
+      font-size: 2.8rem;
+      font-weight: 950;
+    }
+
     .hidden {
       display: none !important;
     }
@@ -871,7 +904,7 @@
       <section class="screen" id="collapseScreen">
         <div class="collapse-screen">
           <div>
-            <h1>ðŸ’¥ BANK A HAS COLLAPSED</h1>
+            <h1>BANK A HAS COLLAPSED</h1>
             <p id="collapseText">Customers tried to withdraw more cash than Bank A could pay. Fractional reserves work while trust holds. When trust breaks, the run becomes the crisis.</p>
             <button class="button" id="backToAdmin" style="margin-top: 22px;">Back to dashboard</button>
           </div>
@@ -1079,9 +1112,9 @@
     }
 
     function assignmentMessage(role, bank) {
-      if (role === "banker" && bank === "A") return "You are Banker A! ðŸ¦";
-      if (role === "banker" && bank === "B") return "You are Banker B! ðŸ¦";
-      return "You are a Customer ðŸ’°";
+      if (role === "banker" && bank === "A") return "You are Banker A!";
+      if (role === "banker" && bank === "B") return "You are Banker B!";
+      return "You are a Customer";
     }
 
     async function joinGame() {
@@ -1410,7 +1443,7 @@
           playerUpdates[`${player.id}/lastDecision`] = "";
           playerUpdates[`${player.id}/lastReport`] = canPay
             ? `${bankNames[bank]} paid ${percent(paidRate)} interest this round.`
-            : `âš ï¸ ${bankNames[bank]} could NOT pay the promised ${percent(banks[bank].rateOffer)}. It paid ${percent(paidRate)}.`;
+            : `Warning: ${bankNames[bank]} could NOT pay the promised ${percent(banks[bank].rateOffer)}. It paid ${percent(paidRate)}.`;
         });
 
         summaries.push(`${bankNames[bank]} chose ${label}: ${returnRate >= 0 ? "+" : ""}${percent(returnRate)} return on ${money(customerInvestment)} customer-funded loans and ${money(ownCapitalInvestment)} own capital, paid ${percent(paidRate)} interest.`);
@@ -1609,7 +1642,7 @@
       els.playerContent.innerHTML = `
         <div class="card waiting">
           <div>
-            <div class="waiting-icon">ðŸ’°</div>
+            <div class="waiting-icon">CHF</div>
             <h2>Please wait</h2>
             <p class="lead">${text}</p>
           </div>
@@ -1713,11 +1746,38 @@
       `;
     }
 
+    function rumourKey(game) {
+      return `rumourAck:${local.id}:${game.round}`;
+    }
+
+    function rumourModal(player, game) {
+      if (!game.rumour || player.bank !== "A" || storage.getItem(rumourKey(game)) === "yes") return "";
+      return `
+        <div class="rumour-modal" role="dialog" aria-modal="true" aria-labelledby="rumourTitle">
+          <div class="rumour-box">
+            <div class="warning-symbol">!</div>
+            <h2 id="rumourTitle">Bank A Rumour</h2>
+            <p class="lead">People are saying Bank A might collapse. Look carefully at your balance, trust level, and the money still owed before deciding.</p>
+            <button class="button danger" id="ackRumour" type="button" style="width: 100%; margin-top: 16px;">OK, I understand</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function bindRumourButton(game) {
+      const button = document.getElementById("ackRumour");
+      if (!button) return;
+      button.addEventListener("click", () => {
+        storage.setItem(rumourKey(game), "yes");
+        render();
+      });
+    }
+
     function renderCustomer(player, game) {
       els.playerRole.textContent = "Customer";
-      els.playerTitle.textContent = "You are a Customer ðŸ’°";
+      els.playerTitle.textContent = "You are a Customer";
       els.playerSubtitle.textContent = game.rumour && player.bank === "A"
-        ? "âš ï¸ RUMOUR: People are saying Bank A might collapse..."
+        ? "RUMOUR: People are saying Bank A might collapse..."
         : `Hi, ${player.name}. Current bank: ${player.bank ? bankNames[player.bank] : "not deposited yet"}.`;
 
       if (game.phase === "setup") {
@@ -1749,10 +1809,6 @@
             <div class="notice ${game.rumour ? "warning" : ""}">${player.lastReport || "Review your bank's result."}</div>
             <div class="notice">Your current bank: <strong>${player.bank ? bankNames[player.bank] : "No bank, holding cash"}</strong>. If your bank owes you money, it will repay it automatically once it has enough capital again. Banks also need to lend money out, otherwise they cannot earn returns.</div>
             ${player.choiceMade ? `<div class="notice">Choice recorded: ${player.lastDecision}</div>` : ""}
-            <div class="grid two">
-              ${roundResultCard("A", game.lastResults?.A || {})}
-              ${roundResultCard("B", game.lastResults?.B || {})}
-            </div>
             <div class="grid three">
               <div class="metric"><span>Your balance</span><strong>${money(player.balance)}</strong></div>
               <div class="metric"><span>Your bank</span><strong>${player.bank ? bankNames[player.bank] : "Cash"}</strong></div>
@@ -1762,15 +1818,17 @@
               <div class="metric danger"><span>Still owed to you</span><strong>${money(player.owed || 0)}</strong></div>
             </div>
             <div class="grid three">
-              <button class="button bank-b ${player.lastDecision?.startsWith("Stayed") ? "selected" : ""}" data-decision="stay" ${!player.bank || player.choiceMade ? "disabled" : ""}>âœ… Stay</button>
+              <button class="button bank-b ${player.lastDecision?.startsWith("Stayed") ? "selected" : ""}" data-decision="stay" ${!player.bank || player.choiceMade ? "disabled" : ""}>Stay</button>
               <button class="button bank-a ${player.lastDecision?.startsWith("Switched") ? "selected" : ""}" data-decision="switch" ${!player.bank || player.choiceMade ? "disabled" : ""}>Switch to ${bankNames[other] || "a bank"}</button>
-              <button class="button danger ${player.lastDecision?.startsWith("Withdrew") ? "selected" : ""}" data-decision="withdraw" ${player.choiceMade ? "disabled" : ""}>Withdraw all ðŸ’°</button>
+              <button class="button danger ${player.lastDecision?.startsWith("Withdrew") ? "selected" : ""}" data-decision="withdraw" ${player.choiceMade ? "disabled" : ""}>Withdraw all</button>
             </div>
           </div>
+          ${rumourModal(player, game)}
         `;
         document.querySelectorAll("[data-decision]").forEach(button => {
           button.addEventListener("click", () => customerDecision(button.dataset.decision));
         });
+        bindRumourButton(game);
         return;
       }
 
@@ -1806,7 +1864,7 @@
       const bankState = game.banks[bank];
       const className = bank === "A" ? "bank-a" : "bank-b";
       els.playerRole.textContent = `Banker ${bank}`;
-      els.playerTitle.textContent = `You are Banker ${bank}! ðŸ¦`;
+      els.playerTitle.textContent = `You are Banker ${bank}!`;
       els.playerSubtitle.textContent = game.phase === "setup" ? "Set the interest rate offer customers will see." : `${bankNames[bank]} dashboard. Choose how to invest deposits this round.`;
 
       if (game.phase === "setup") {
@@ -1943,7 +2001,7 @@
         return;
       }
       setScreen(game.collapsedBank ? els.collapseScreen : els.adminScreen);
-      document.querySelector("#collapseScreen h1").textContent = `💥 ${bankNames[game.collapsedBank] || "A bank"} HAS COLLAPSED`;
+      document.querySelector("#collapseScreen h1").textContent = `${bankNames[game.collapsedBank] || "A bank"} HAS COLLAPSED`;
       els.backToAdmin.classList.toggle("hidden", !isAdminView());
       els.adminPhaseLine.textContent = `${game.phase.toUpperCase()} - Round ${game.round}${game.paused ? " - Paused" : ""}`;
       const banks = recomputeBanks(snapshot.players, game);
@@ -1989,11 +2047,11 @@
     function renderPlayers() {
       const players = Object.values(snapshot.players || {}).sort((a, b) => (a.role + a.name).localeCompare(b.role + b.name));
       els.adminPlayers.innerHTML = players.map(player => {
-        const online = snapshot.presence?.[player.id] ? "âœ…" : "âš ï¸";
+        const online = snapshot.presence?.[player.id] ? "Online" : "Offline";
         const where = player.role === "customer" ? (player.bank ? bankNames[player.bank] : "Cash") : (player.bank ? bankNames[player.bank] : player.role);
         return `
           <div class="person">
-            <div>${online} ${player.name}<small>${player.role} â€¢ ${where}</small></div>
+            <div>${online} ${player.name}<small>${player.role} - ${where}</small></div>
             <strong>${player.role === "customer" ? money((player.balance || 0) + (player.cash || 0)) : ""}</strong>
           </div>
         `;
