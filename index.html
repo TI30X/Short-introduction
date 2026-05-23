@@ -653,6 +653,11 @@
         font-size: 0.72rem;
       }
 
+      #playerScreen #playerRole {
+        font-size: 1.12rem;
+        padding: 8px 12px;
+      }
+
       #playerScreen h2 {
         font-size: clamp(1.75rem, 7vw, 2.2rem);
         line-height: 1.08;
@@ -887,23 +892,28 @@
       B: "Bank B"
     };
 
-    const investmentOptions = {
+    const investmentPools = {
       A: [
-        { id: "realEstate", name: "Speculative Real Estate", shown: "+15% or -40%", risk: "High risk" },
-        { id: "crypto", name: "Crypto Fund", shown: "+25% or -60%", risk: "Very high risk" },
-        { id: "derivatives", name: "Leveraged Derivatives", shown: "+30% or -80%", risk: "Extreme risk" }
+        { id: "realEstate", name: "Speculative Real Estate", shown: "+15% or -40%", win: 0.15, loss: -0.40, chance: 0.58, risk: "High risk" },
+        { id: "crypto", name: "Crypto Fund", shown: "+25% or -60%", win: 0.25, loss: -0.60, chance: 0.48, risk: "Very high risk" },
+        { id: "derivatives", name: "Leveraged Derivatives", shown: "+30% or -80%", win: 0.30, loss: -0.80, chance: 0.42, risk: "Extreme risk" },
+        { id: "aiStartups", name: "AI Start-up Basket", shown: "+20% or -35%", win: 0.20, loss: -0.35, chance: 0.55, risk: "High risk" },
+        { id: "luxuryAlps", name: "Luxury Alpine Resorts", shown: "+12% or -22%", win: 0.12, loss: -0.22, chance: 0.62, risk: "Medium-high risk" },
+        { id: "emergingMarkets", name: "Emerging Market Fund", shown: "+18% or -30%", win: 0.18, loss: -0.30, chance: 0.54, risk: "High risk" }
       ],
       B: [
-        { id: "bonds", name: "Government Bonds", shown: "could lose 1% or win 4%", returnRate: 0.03, risk: "Low risk" },
-        { id: "smallBusiness", name: "Small Business Loans", shown: "could lose 6% or win 12%", returnRate: 0.06, risk: "Medium risk" },
-        { id: "corporate", name: "Corporate Lending", shown: "could lose 6% or win 20%", returnRate: 0.08, risk: "Medium-high risk" }
+        { id: "bonds", name: "Government Bonds", shown: "could lose 1% or win 4%", win: 0.04, loss: -0.01, chance: 0.86, risk: "Low risk" },
+        { id: "smallBusiness", name: "Small Business Loans", shown: "could lose 6% or win 12%", win: 0.12, loss: -0.06, chance: 0.72, risk: "Medium risk" },
+        { id: "corporate", name: "Corporate Lending", shown: "could lose 6% or win 20%", win: 0.20, loss: -0.06, chance: 0.64, risk: "Medium-high risk" },
+        { id: "greenInfra", name: "Green Infrastructure", shown: "could lose 3% or win 9%", win: 0.09, loss: -0.03, chance: 0.78, risk: "Medium-low risk" },
+        { id: "mortgages", name: "Swiss Mortgages", shown: "could lose 2% or win 6%", win: 0.06, loss: -0.02, chance: 0.82, risk: "Low-medium risk" },
+        { id: "tradeFinance", name: "Trade Finance", shown: "could lose 4% or win 10%", win: 0.10, loss: -0.04, chance: 0.74, risk: "Medium risk" }
       ]
     };
 
-    const bankAForcedReturns = {
-      realEstate: { success: 0.15, fail: -0.40 },
-      crypto: { success: 0.25, fail: -0.60 },
-      derivatives: { success: 0.30, fail: -0.80 }
+    const investmentOptions = {
+      A: investmentPools.A.slice(0, 3),
+      B: investmentPools.B.slice(0, 3)
     };
 
     const els = {
@@ -1150,6 +1160,32 @@
       return customerPlayers().filter(player => !player.bank);
     }
 
+    function shuffledOptions(bank) {
+      return investmentPools[bank]
+        .map(option => ({ option, sort: Math.random() }))
+        .sort((a, b) => a.sort - b.sort)
+        .slice(0, 3)
+        .map(item => item.option);
+    }
+
+    function bankOptions(bank, bankState = snapshot.game?.banks?.[bank]) {
+      return bankState?.availableOptions || investmentOptions[bank];
+    }
+
+    function findInvestment(bank, optionId, bankState = snapshot.game?.banks?.[bank]) {
+      return bankOptions(bank, bankState).find(option => option.id === optionId)
+        || investmentPools[bank].find(option => option.id === optionId)
+        || investmentOptions[bank][0];
+    }
+
+    function trustDelta(customers, returnRate, canPay) {
+      if (customers <= 0) return 0;
+      let delta = canPay ? 3 : -25;
+      if (returnRate < 0) delta += Math.max(-22, Math.round(returnRate * 45));
+      if (returnRate > 0.08) delta += 5;
+      return delta;
+    }
+
     function recomputeBanks(players = snapshot.players, game = snapshot.game) {
       const customers = Object.values(players || {}).filter(player => player.role === "customer");
       const banks = structuredClone(game.banks || gameDefaults().banks);
@@ -1212,7 +1248,7 @@
     }
 
     async function bankerPick(bank, optionId) {
-      const option = investmentOptions[bank].find(item => item.id === optionId);
+      const option = findInvestment(bank, optionId);
       await gameRef.child(`banks/${bank}`).update({
         selectedInvestment: optionId,
         selectedLabel: option?.name || "Investment selected"
@@ -1227,6 +1263,7 @@
         ["A", "B"].forEach(bank => {
           banks[bank].selectedInvestment = "";
           banks[bank].selectedLabel = "";
+          banks[bank].availableOptions = shuffledOptions(bank);
         });
         await gameRef.update({
           phase: "investment",
@@ -1237,12 +1274,11 @@
       });
     }
 
-    function getInvestmentReturn(bank, optionId, round) {
-      if (bank === "A") {
-        const option = bankAForcedReturns[optionId] || bankAForcedReturns.realEstate;
-        return round <= 2 ? option.success : option.fail;
-      }
-      return (investmentOptions.B.find(option => option.id === optionId) || investmentOptions.B[0]).returnRate;
+    function getInvestmentReturn(bank, optionId, round, bankState) {
+      const option = findInvestment(bank, optionId, bankState);
+      const earlyBoost = bank === "A" && round <= 2 ? 0.12 : 0;
+      const chance = Math.max(0.05, Math.min(0.95, Number(option.chance || 0.5) + earlyBoost));
+      return Math.random() < chance ? option.win : option.loss;
     }
 
     async function revealResults() {
@@ -1257,10 +1293,14 @@
       let collapsedBank = "";
 
       ["A", "B"].forEach(bank => {
-        const selected = banks[bank].selectedInvestment || investmentOptions[bank][0].id;
-        const returnRate = getInvestmentReturn(bank, selected, game.round);
-        const investmentBase = Math.max(0, banks[bank].deposits * (1 - RESERVE_RATIO));
+        const selected = banks[bank].selectedInvestment || bankOptions(bank, banks[bank])[0].id;
+        const returnRate = getInvestmentReturn(bank, selected, game.round, banks[bank]);
+        const customerInvestment = Math.max(0, banks[bank].deposits * (1 - RESERVE_RATIO));
+        const ownCapitalInvestment = Math.max(0, Number(banks[bank].capital ?? STARTING_CAPITAL));
+        const investmentBase = customerInvestment + ownCapitalInvestment;
         const gain = investmentBase * returnRate;
+        const customerFundGain = customerInvestment * returnRate;
+        const ownCapitalGain = ownCapitalInvestment * returnRate;
         banks[bank].capital = Number(banks[bank].capital ?? STARTING_CAPITAL) + gain;
         const promised = banks[bank].deposits * banks[bank].rateOffer;
         const customersAtBank = Object.values(players).filter(player => player.role === "customer" && player.bank === bank);
@@ -1281,12 +1321,16 @@
         banks[bank].debt = Math.max(0, -banks[bank].capital) + banks[bank].owedToCustomers;
         banks[bank].lastWithdrawn = Math.max(0, Number(game.banks?.[bank]?.deposits || 0) - banks[bank].deposits);
         banks[bank].solvent = canPay;
-        banks[bank].trust = Math.max(0, Math.min(100, (banks[bank].trust || 100) + (canPay ? 4 : -34)));
-        const label = investmentOptions[bank].find(option => option.id === selected)?.name || "No investment";
+        banks[bank].trust = Math.max(0, Math.min(100, (banks[bank].trust || 100) + trustDelta(banks[bank].customers, returnRate, canPay)));
+        const label = findInvestment(bank, selected, banks[bank])?.name || "No investment";
         lastResults[bank] = {
           label,
           returnRate,
           gain,
+          customerInvestment,
+          ownCapitalInvestment,
+          customerFundGain,
+          ownCapitalGain,
           promisedRate: banks[bank].rateOffer,
           paidRate,
           unpaidInterest,
@@ -1314,7 +1358,7 @@
             : `⚠️ ${bankNames[bank]} could NOT pay the promised ${percent(banks[bank].rateOffer)}. It paid ${percent(paidRate)}.`;
         });
 
-        summaries.push(`${bankNames[bank]} chose ${label}: ${returnRate >= 0 ? "+" : ""}${percent(returnRate)} return, paid ${percent(paidRate)} interest.`);
+        summaries.push(`${bankNames[bank]} chose ${label}: ${returnRate >= 0 ? "+" : ""}${percent(returnRate)} return on ${money(customerInvestment)} customer-funded loans and ${money(ownCapitalInvestment)} own capital, paid ${percent(paidRate)} interest.`);
 
         if (bank === "A" && game.round >= 4 && !canPay && bankCustomers("A").length <= 1) {
           collapsedBank = "A";
@@ -1383,6 +1427,7 @@
       ["A", "B"].forEach(bank => {
         banks[bank].selectedInvestment = "";
         banks[bank].selectedLabel = "";
+        banks[bank].availableOptions = shuffledOptions(bank);
       });
       await playersRef.update(resetChoices);
       await gameRef.update({
@@ -1536,6 +1581,11 @@
           <div class="metric ${className}"><span>Investment</span><strong>${result.label || "No choice"}</strong></div>
           <div class="grid two">
             <div class="metric"><span>Return</span><strong>${result.returnRate >= 0 ? "+" : ""}${percent(result.returnRate || 0)}</strong></div>
+            <div class="metric"><span>Trust level</span><strong>${snapshot.game?.banks?.[bank]?.trust ?? 100}/100</strong></div>
+            <div class="metric"><span>Customer money invested</span><strong>${money(result.customerInvestment || 0)}</strong></div>
+            <div class="metric"><span>Bank capital invested</span><strong>${money(result.ownCapitalInvestment || 0)}</strong></div>
+            <div class="metric"><span>Customer-fund result</span><strong>${money(result.customerFundGain || 0)}</strong></div>
+            <div class="metric"><span>Own-capital result</span><strong>${money(result.ownCapitalGain || 0)}</strong></div>
             <div class="metric ${result.canPay === false ? "danger" : "bank-b"}"><span>Paid interest</span><strong>${percent(result.paidRate || 0)}</strong></div>
             <div class="metric"><span>Repaid old debt</span><strong>${money(result.repaid || 0)}</strong></div>
             <div class="metric danger"><span>New unpaid interest</span><strong>${money(result.unpaidInterest || 0)}</strong></div>
@@ -1554,8 +1604,8 @@
       if (game.phase === "setup") {
         els.playerContent.innerHTML = `
           <div class="grid two">
-            ${bankChoiceCard("A", game.banks.A.rateOffer)}
-            ${bankChoiceCard("B", game.banks.B.rateOffer)}
+            ${bankChoiceCard("A", game.banks.A)}
+            ${bankChoiceCard("B", game.banks.B)}
           </div>
           ${player.choiceMade ? `<div class="notice" style="margin-top: 12px;">Choice recorded: ${player.lastDecision || player.lastReport}</div>` : ""}
         `;
@@ -1582,6 +1632,8 @@
             <div class="grid three">
               <div class="metric"><span>Your balance</span><strong>${money(player.balance)}</strong></div>
               <div class="metric"><span>Your bank</span><strong>${player.bank ? bankNames[player.bank] : "Cash"}</strong></div>
+              <div class="metric"><span>Bank A trust</span><strong>${game.banks.A.trust}/100</strong></div>
+              <div class="metric"><span>Bank B trust</span><strong>${game.banks.B.trust}/100</strong></div>
               <div class="metric bank-b"><span>Interest earned</span><strong>${money(player.lastInterest)}</strong></div>
               <div class="metric danger"><span>Still owed to you</span><strong>${money(player.owed || 0)}</strong></div>
             </div>
@@ -1606,12 +1658,13 @@
       renderWaiting(game.phase === "investment" ? "Bankers are choosing investments." : "The teacher is preparing the next round.");
     }
 
-    function bankChoiceCard(bank, rate) {
+    function bankChoiceCard(bank, bankState) {
       const className = bank === "A" ? "bank-a" : "bank-b";
       return `
         <article class="bank-card ${className}">
           <h2>${bankNames[bank]}</h2>
-          <div class="metric ${className}"><span>Offered interest</span><strong>${percent(rate)}</strong></div>
+          <div class="metric ${className}"><span>Offered interest</span><strong>${percent(bankState.rateOffer)}</strong></div>
+          <div class="metric"><span>Trust level</span><strong>${bankState.trust}/100</strong></div>
           <p class="lead">Deposit your CHF 1'000 here for Round 1.</p>
           <button class="button ${className}" data-bank-choice="${bank}">Deposit at ${bankNames[bank]}</button>
         </article>
@@ -1652,11 +1705,13 @@
       }
 
       if (game.phase === "investment") {
-        const options = investmentOptions[bank];
+        const options = bankOptions(bank, bankState);
         els.playerContent.innerHTML = `
           <div class="grid">
             <div class="grid three">
               <div class="metric ${className}"><span>Total deposits</span><strong>${money(bankState.deposits)}</strong></div>
+              <div class="metric"><span>Customer loan funds to invest</span><strong>${money(Math.max(0, bankState.deposits * (1 - RESERVE_RATIO)))}</strong></div>
+              <div class="metric"><span>Own capital to invest</span><strong>${money(Math.max(0, bankState.capital || 0))}</strong></div>
               <div class="metric"><span>Customers</span><strong>${bankState.customers}</strong></div>
               <div class="metric"><span>Capital / debt</span><strong>${money(bankState.capital || 0)}</strong></div>
               <div class="metric"><span>Withdrawn last round</span><strong>${money(bankState.lastWithdrawn || 0)}</strong></div>
@@ -1696,6 +1751,8 @@
               <div class="metric ${className}"><span>Return</span><strong>${money(bankState.lastReturn)}</strong></div>
               <div class="metric"><span>Paid rate</span><strong>${percent(bankState.lastPaidRate)}</strong></div>
               <div class="metric"><span>Trust</span><strong>${bankState.trust}/100</strong></div>
+              <div class="metric"><span>Customer money invested</span><strong>${money(game.lastResults?.[bank]?.customerInvestment || 0)}</strong></div>
+              <div class="metric"><span>Bank capital invested</span><strong>${money(game.lastResults?.[bank]?.ownCapitalInvestment || 0)}</strong></div>
               <div class="metric"><span>Capital / debt</span><strong>${money(bankState.capital || 0)}</strong></div>
               <div class="metric"><span>Withdrawn</span><strong>${money(bankState.lastWithdrawn || 0)}</strong></div>
               <div class="metric danger"><span>Owed to customers</span><strong>${money(bankState.owedToCustomers || 0)}</strong></div>
