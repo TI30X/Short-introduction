@@ -1228,7 +1228,7 @@
         <div class="work-subtitle">Interactive classroom activity: Run Your Bank</div>
         <div class="work-subtitle">Prepared for the English presentation project - KSA</div>
         <div class="work-subtitle">Made together with Alea Wildberger</div>
-        <div class="disclaimer"><strong>Important disclaimer:</strong> This game is simplified for explanation and time-restraint purposes. In reality, central banks, regulation, deposit insurance, interbank lending, and longer-term loan contracts would also shape how banks survive stress.</div>
+        <div class="disclaimer"><strong>Important disclaimer:</strong> This classroom game is a simplified teaching model for explanation and time-restraint purposes. It does not fully represent real banking, Swiss or international bank regulation, central-bank policy, minimum reserve rules, capital and liquidity requirements, deposit insurance, interbank lending, lender-of-last-resort support, risk-weighted assets, loan defaults, accounting rules, market liquidity, legal constraints, customer behaviour, or longer-term loan contracts. Numbers, returns, trust changes, collapses, and outcomes are fictional and designed to show the core trade-off between profitability, liquidity, risk, and trust.</div>
       </div>
     </footer>
   </div>
@@ -2499,7 +2499,7 @@
           : "Watch the current phase and use this screen for class discussion.";
       els.projectorTiles.innerHTML = explanationTiles(game).map(tile => `
         <div class="projector-tile"><strong>${tile[0]}</strong><p class="lead">${tile[1]}</p></div>
-      `).join("") + `<div class="projector-tile disclaimer"><strong>Important disclaimer</strong><p>This is a simplified model for explanation and time-restraint purposes. Real banking also involves central banks, regulation, deposit insurance, interbank lending, and long-term loan contracts.</p></div>`;
+      `).join("");
       els.projectorParticipants.innerHTML = participantRows();
       els.projectorLeaderboardCard.classList.toggle("hidden", game.phase !== "leaderboard");
       if (game.phase === "leaderboard") {
