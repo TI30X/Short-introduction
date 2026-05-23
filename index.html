@@ -172,6 +172,17 @@
       font-size: 0.76rem;
     }
 
+    #playerRole {
+      display: inline-block;
+      font-size: clamp(1.05rem, 4vw, 1.35rem);
+      color: var(--navy);
+      background: rgba(79, 195, 247, 0.18);
+      border: 1px solid rgba(79, 195, 247, 0.36);
+      border-radius: 999px;
+      padding: 8px 12px;
+      margin-bottom: 10px;
+    }
+
     .lead {
       max-width: 46rem;
       margin-top: 14px;
@@ -827,6 +838,8 @@
                 <button class="button bank-b" id="closeDeposits">Close Deposits</button>
                 <button class="button secondary" id="pauseGame">Pause</button>
                 <button class="button secondary" id="resumeGame">Resume</button>
+                <button class="button" id="skipTimer">Skip Timer</button>
+                <button class="button secondary" id="goBack">Go Back</button>
                 <button class="button bank-a" id="endRound">End Round</button>
                 <button class="button danger" id="triggerRumour">Trigger Rumour</button>
                 <button class="button danger" id="endGame">End Game</button>
@@ -868,6 +881,7 @@
     const CUSTOMER_DEPOSIT = 1000;
     const RESERVE_RATIO = 0.18;
     const TIMER_SECONDS = 20;
+    const STARTING_CAPITAL = 2500;
     const bankNames = {
       A: "Bank A",
       B: "Bank B"
@@ -875,14 +889,14 @@
 
     const investmentOptions = {
       A: [
-        { id: "realEstate", name: "Speculative Real Estate", shown: "+15% or -40%" },
-        { id: "crypto", name: "Crypto Fund", shown: "+25% or -60%" },
-        { id: "derivatives", name: "Leveraged Derivatives", shown: "+30% or -80%" }
+        { id: "realEstate", name: "Speculative Real Estate", shown: "+15% or -40%", risk: "High risk" },
+        { id: "crypto", name: "Crypto Fund", shown: "+25% or -60%", risk: "Very high risk" },
+        { id: "derivatives", name: "Leveraged Derivatives", shown: "+30% or -80%", risk: "Extreme risk" }
       ],
       B: [
-        { id: "bonds", name: "Government Bonds", shown: "could lose 1% or win 4%", returnRate: 0.03 },
-        { id: "smallBusiness", name: "Small Business Loans", shown: "could lose 6% or win 12%", returnRate: 0.06 },
-        { id: "corporate", name: "Corporate Lending", shown: "could lose 6% or win 20%", returnRate: 0.08 }
+        { id: "bonds", name: "Government Bonds", shown: "could lose 1% or win 4%", returnRate: 0.03, risk: "Low risk" },
+        { id: "smallBusiness", name: "Small Business Loans", shown: "could lose 6% or win 12%", returnRate: 0.06, risk: "Medium risk" },
+        { id: "corporate", name: "Corporate Lending", shown: "could lose 6% or win 20%", returnRate: 0.08, risk: "Medium-high risk" }
       ]
     };
 
@@ -924,6 +938,8 @@
       closeDeposits: document.getElementById("closeDeposits"),
       pauseGame: document.getElementById("pauseGame"),
       resumeGame: document.getElementById("resumeGame"),
+      skipTimer: document.getElementById("skipTimer"),
+      goBack: document.getElementById("goBack"),
       endRound: document.getElementById("endRound"),
       triggerRumour: document.getElementById("triggerRumour"),
       endGame: document.getElementById("endGame"),
@@ -979,10 +995,11 @@
         collapsedBank: "",
         countdownEndsAt: 0,
         banks: {
-          A: { rateOffer: 0.04, selectedInvestment: "", deposits: 0, customers: 0, cash: 0, assets: 0, lastReturn: 0, lastPaidRate: 0, solvent: true, trust: 100 },
-          B: { rateOffer: 0.01, selectedInvestment: "", deposits: 0, customers: 0, cash: 0, assets: 0, lastReturn: 0, lastPaidRate: 0, solvent: true, trust: 100 }
+          A: { rateOffer: 0.04, selectedInvestment: "", deposits: 0, customers: 0, cash: 0, assets: 0, capital: STARTING_CAPITAL, debt: 0, owedToCustomers: 0, lastWithdrawn: 0, lastReturn: 0, lastPaidRate: 0, lastRepaid: 0, solvent: true, trust: 100 },
+          B: { rateOffer: 0.01, selectedInvestment: "", deposits: 0, customers: 0, cash: 0, assets: 0, capital: STARTING_CAPITAL, debt: 0, owedToCustomers: 0, lastWithdrawn: 0, lastReturn: 0, lastPaidRate: 0, lastRepaid: 0, solvent: true, trust: 100 }
         },
         lastResults: {},
+        previousGame: null,
         history: []
       };
     }
@@ -995,8 +1012,14 @@
         const game = snap.val() || {};
         const updates = {};
         if (!game.lastResults) updates.lastResults = {};
+        if (game.phase === "results") updates.phase = "decision";
         if (game.banks?.A && Number(game.banks.A.rateOffer || 0) < 0.04) updates["banks/A/rateOffer"] = 0.04;
         if (game.banks?.B && Number(game.banks.B.rateOffer || 0) > 0.05) updates["banks/B/rateOffer"] = 0.05;
+        ["A", "B"].forEach(bank => {
+          if (game.banks?.[bank] && game.banks[bank].capital === undefined) updates[`banks/${bank}/capital`] = STARTING_CAPITAL;
+          if (game.banks?.[bank] && game.banks[bank].debt === undefined) updates[`banks/${bank}/debt`] = 0;
+          if (game.banks?.[bank] && game.banks[bank].owedToCustomers === undefined) updates[`banks/${bank}/owedToCustomers`] = 0;
+        });
         if (Object.keys(updates).length) await gameRef.update(updates);
       }
     }
@@ -1060,6 +1083,7 @@
             bank: assignment.bank,
             balance: assignment.role === "customer" ? Number(players[local.id]?.balance || CUSTOMER_DEPOSIT) : 0,
             cash: assignment.role === "customer" ? Number(players[local.id]?.cash || 0) : 0,
+            owed: Number(players[local.id]?.owed || 0),
             choiceMade: false,
             lastInterest: Number(players[local.id]?.lastInterest || 0),
             lastReport: assignmentMessage(assignment.role, assignment.bank),
@@ -1134,7 +1158,10 @@
         const deposits = group.reduce((sum, player) => sum + (Number(player.balance) || 0), 0);
         banks[bank].deposits = deposits;
         banks[bank].customers = group.length;
-        banks[bank].cash = Math.max(0, deposits * RESERVE_RATIO + (banks[bank].lastReturn || 0));
+        banks[bank].capital = Number(banks[bank].capital ?? STARTING_CAPITAL);
+        banks[bank].debt = Math.max(0, Number(banks[bank].debt || 0));
+        banks[bank].owedToCustomers = Math.max(0, Number(banks[bank].owedToCustomers || 0));
+        banks[bank].cash = Math.max(0, deposits * RESERVE_RATIO + Math.max(0, banks[bank].capital));
         banks[bank].assets = Math.max(0, deposits - deposits * RESERVE_RATIO);
       });
       return banks;
@@ -1204,6 +1231,7 @@
         await gameRef.update({
           phase: "investment",
           countdownEndsAt: Date.now() + TIMER_SECONDS * 1000,
+          previousGame: undoSnapshot(game),
           banks
         });
       });
@@ -1233,12 +1261,25 @@
         const returnRate = getInvestmentReturn(bank, selected, game.round);
         const investmentBase = Math.max(0, banks[bank].deposits * (1 - RESERVE_RATIO));
         const gain = investmentBase * returnRate;
+        banks[bank].capital = Number(banks[bank].capital ?? STARTING_CAPITAL) + gain;
         const promised = banks[bank].deposits * banks[bank].rateOffer;
-        const availableForInterest = Math.max(0, banks[bank].deposits * RESERVE_RATIO + gain);
-        const paidRate = promised > 0 ? Math.min(banks[bank].rateOffer, availableForInterest / Math.max(banks[bank].deposits, 1)) : 0;
+        const customersAtBank = Object.values(players).filter(player => player.role === "customer" && player.bank === bank);
+        const oldOwed = customersAtBank.reduce((sum, player) => sum + Number(player.owed || 0), 0);
+        let availableCapital = Math.max(0, banks[bank].capital);
+        const repayTotal = Math.min(oldOwed, availableCapital);
+        banks[bank].capital -= repayTotal;
+        availableCapital -= repayTotal;
+        const paidInterestTotal = Math.min(promised, availableCapital);
+        banks[bank].capital -= paidInterestTotal;
+        const paidRate = promised > 0 ? paidInterestTotal / Math.max(banks[bank].deposits, 1) : 0;
+        const unpaidInterest = Math.max(0, promised - paidInterestTotal);
         const canPay = paidRate >= banks[bank].rateOffer - 0.0001;
         banks[bank].lastReturn = gain;
         banks[bank].lastPaidRate = paidRate;
+        banks[bank].lastRepaid = repayTotal;
+        banks[bank].owedToCustomers = Math.max(0, oldOwed - repayTotal + unpaidInterest);
+        banks[bank].debt = Math.max(0, -banks[bank].capital) + banks[bank].owedToCustomers;
+        banks[bank].lastWithdrawn = Math.max(0, Number(game.banks?.[bank]?.deposits || 0) - banks[bank].deposits);
         banks[bank].solvent = canPay;
         banks[bank].trust = Math.max(0, Math.min(100, (banks[bank].trust || 100) + (canPay ? 4 : -34)));
         const label = investmentOptions[bank].find(option => option.id === selected)?.name || "No investment";
@@ -1248,15 +1289,24 @@
           gain,
           promisedRate: banks[bank].rateOffer,
           paidRate,
+          unpaidInterest,
+          repaid: repayTotal,
           canPay,
           deposits: banks[bank].deposits,
           customers: banks[bank].customers
         };
 
-        Object.values(players).filter(player => player.role === "customer" && player.bank === bank).forEach(player => {
-          const interest = (Number(player.balance) || 0) * paidRate;
+        customersAtBank.forEach(player => {
+          const balance = Number(player.balance) || 0;
+          const share = banks[bank].deposits > 0 ? balance / banks[bank].deposits : 0;
+          const oldPlayerOwed = Number(player.owed || 0);
+          const repaid = Math.min(oldPlayerOwed, repayTotal * share);
+          const interest = balance * paidRate;
+          const newlyOwed = balance * banks[bank].rateOffer - interest;
           playerUpdates[`${player.id}/balance`] = Number(player.balance || 0) + interest;
           playerUpdates[`${player.id}/lastInterest`] = interest;
+          playerUpdates[`${player.id}/lastRepaid`] = repaid;
+          playerUpdates[`${player.id}/owed`] = Math.max(0, oldPlayerOwed - repaid + newlyOwed);
           playerUpdates[`${player.id}/choiceMade`] = false;
           playerUpdates[`${player.id}/lastDecision`] = "";
           playerUpdates[`${player.id}/lastReport`] = canPay
@@ -1279,11 +1329,12 @@
 
       await playersRef.update(playerUpdates);
       await gameRef.update({
-        phase: collapsedBank ? "ended" : "results",
+        phase: collapsedBank ? "ended" : "decision",
         rumour: game.rumour || (game.round >= 4 && !banks.A.solvent),
         collapsedBank,
         ended: Boolean(collapsedBank),
-        countdownEndsAt: collapsedBank ? 0 : Date.now() + 8000,
+        countdownEndsAt: collapsedBank ? 0 : Date.now() + TIMER_SECONDS * 1000,
+        previousGame: undoSnapshot(game),
         banks,
         lastResults,
         history
@@ -1311,6 +1362,7 @@
           ended: true,
           collapsedBank: "A",
           countdownEndsAt: 0,
+          previousGame: undoSnapshot(game),
           history: [...(game.history || []), {
             round: game.round,
             text: "Bank A suffered a withdrawal cascade and could not meet the rush for cash.",
@@ -1335,9 +1387,10 @@
       await playersRef.update(resetChoices);
       await gameRef.update({
         phase: "investment",
-        round: game.phase === "decision" || game.phase === "results" ? game.round + 1 : game.round,
+        round: game.phase === "decision" ? game.round + 1 : game.round,
         countdownEndsAt: Date.now() + TIMER_SECONDS * 1000,
         paused: false,
+        previousGame: undoSnapshot(game),
         banks,
         lastResults: {}
       });
@@ -1356,7 +1409,6 @@
     async function endRound() {
       if (!snapshot.game) return;
       if (snapshot.game.phase === "investment") await revealResults();
-      else if (snapshot.game.phase === "results") await openCustomerDecisions();
       else if (snapshot.game.phase === "decision") await startRound();
     }
 
@@ -1369,11 +1421,29 @@
     }
 
     async function endGame() {
-      await gameRef.update({ phase: "ended", ended: true, countdownEndsAt: 0 });
+      await gameRef.update({ phase: "ended", ended: true, countdownEndsAt: 0, previousGame: undoSnapshot() });
     }
 
     function isAdminView() {
       return local.isAdmin && urlParams.get("admin") === "true";
+    }
+
+    function undoSnapshot(game = snapshot.game) {
+      if (!game) return null;
+      const copy = structuredClone(game);
+      delete copy.previousGame;
+      return copy;
+    }
+
+    async function goBackPhase() {
+      const previous = snapshot.game?.previousGame;
+      if (!previous) return;
+      await gameRef.set({ ...previous, previousGame: null });
+    }
+
+    async function skipTimerNow() {
+      if (!snapshot.game) return;
+      await autoAdvancePhase(snapshot.game.phase);
     }
 
     async function resetGame() {
@@ -1410,7 +1480,6 @@
       autoAdvanceInFlight = true;
       try {
         if (phase === "investment") await revealResults();
-        else if (phase === "results") await openCustomerDecisions();
         else if (phase === "decision") await startRound();
       } finally {
         setTimeout(() => {
@@ -1468,6 +1537,8 @@
           <div class="grid two">
             <div class="metric"><span>Return</span><strong>${result.returnRate >= 0 ? "+" : ""}${percent(result.returnRate || 0)}</strong></div>
             <div class="metric ${result.canPay === false ? "danger" : "bank-b"}"><span>Paid interest</span><strong>${percent(result.paidRate || 0)}</strong></div>
+            <div class="metric"><span>Repaid old debt</span><strong>${money(result.repaid || 0)}</strong></div>
+            <div class="metric danger"><span>New unpaid interest</span><strong>${money(result.unpaidInterest || 0)}</strong></div>
           </div>
         </article>
       `;
@@ -1478,7 +1549,7 @@
       els.playerTitle.textContent = "You are a Customer 💰";
       els.playerSubtitle.textContent = game.rumour && player.bank === "A"
         ? "⚠️ RUMOUR: People are saying Bank A might collapse..."
-        : `Hi, ${player.name}. Choose carefully. Trust can move faster than money.`;
+        : `Hi, ${player.name}. Current bank: ${player.bank ? bankNames[player.bank] : "not deposited yet"}.`;
 
       if (game.phase === "setup") {
         els.playerContent.innerHTML = `
@@ -1502,11 +1573,17 @@
         els.playerContent.innerHTML = `
           <div class="grid">
             <div class="notice ${game.rumour ? "warning" : ""}">${player.lastReport || "Review your bank's result."}</div>
+            <div class="notice">Your current bank: <strong>${player.bank ? bankNames[player.bank] : "No bank, holding cash"}</strong>. If your bank owes you money, it will repay it automatically once it has enough capital again. Banks also need to lend money out, otherwise they cannot earn returns.</div>
             ${player.choiceMade ? `<div class="notice">Choice recorded: ${player.lastDecision}</div>` : ""}
+            <div class="grid two">
+              ${roundResultCard("A", game.lastResults?.A || {})}
+              ${roundResultCard("B", game.lastResults?.B || {})}
+            </div>
             <div class="grid three">
               <div class="metric"><span>Your balance</span><strong>${money(player.balance)}</strong></div>
               <div class="metric"><span>Your bank</span><strong>${player.bank ? bankNames[player.bank] : "Cash"}</strong></div>
               <div class="metric bank-b"><span>Interest earned</span><strong>${money(player.lastInterest)}</strong></div>
+              <div class="metric danger"><span>Still owed to you</span><strong>${money(player.owed || 0)}</strong></div>
             </div>
             <div class="grid three">
               <button class="button bank-b ${player.lastDecision?.startsWith("Stayed") ? "selected" : ""}" data-decision="stay" ${!player.bank || player.choiceMade ? "disabled" : ""}>✅ Stay</button>
@@ -1563,6 +1640,7 @@
             <label for="rateOffer">Interest rate offer</label>
             <input id="rateOffer" type="range" min="${minRate}" max="${maxRate}" step="0.5" value="${bankState.rateOffer * 100}" />
             <div class="metric ${className}" style="margin-top: 14px;"><span>Customer offer</span><strong id="rateOfferLabel">${percent(bankState.rateOffer)}</strong></div>
+            <div class="metric" style="margin-top: 14px;"><span>Starting capital insurance</span><strong>${money(bankState.capital ?? STARTING_CAPITAL)}</strong></div>
             <div class="notice" style="margin-top: 14px;">Range: ${minRate}% to ${maxRate}%. Customers will choose one bank when the teacher closes deposits.</div>
           </div>
         `;
@@ -1580,7 +1658,10 @@
             <div class="grid three">
               <div class="metric ${className}"><span>Total deposits</span><strong>${money(bankState.deposits)}</strong></div>
               <div class="metric"><span>Customers</span><strong>${bankState.customers}</strong></div>
-              <div class="metric"><span>Reserve cash</span><strong>${money(bankState.cash)}</strong></div>
+              <div class="metric"><span>Capital / debt</span><strong>${money(bankState.capital || 0)}</strong></div>
+              <div class="metric"><span>Withdrawn last round</span><strong>${money(bankState.lastWithdrawn || 0)}</strong></div>
+              <div class="metric danger"><span>Owed to customers</span><strong>${money(bankState.owedToCustomers || 0)}</strong></div>
+              <div class="metric ${bankState.solvent ? "bank-b" : "danger"}"><span>Interest status</span><strong>${bankState.solvent ? "Could pay" : "Could not pay"}</strong></div>
             </div>
             <div class="card pad">
               <h3>Investment options</h3>
@@ -1589,7 +1670,7 @@
                 ${options.map(option => `
                   <button class="option ${bankState.selectedInvestment === option.id ? "selected" : ""}" data-investment="${option.id}">
                     ${option.name}
-                    <small>${option.shown}</small>
+                    <small>${option.shown} • Risk factor: ${option.risk}</small>
                   </button>
                 `).join("")}
               </div>
@@ -1615,6 +1696,9 @@
               <div class="metric ${className}"><span>Return</span><strong>${money(bankState.lastReturn)}</strong></div>
               <div class="metric"><span>Paid rate</span><strong>${percent(bankState.lastPaidRate)}</strong></div>
               <div class="metric"><span>Trust</span><strong>${bankState.trust}/100</strong></div>
+              <div class="metric"><span>Capital / debt</span><strong>${money(bankState.capital || 0)}</strong></div>
+              <div class="metric"><span>Withdrawn</span><strong>${money(bankState.lastWithdrawn || 0)}</strong></div>
+              <div class="metric danger"><span>Owed to customers</span><strong>${money(bankState.owedToCustomers || 0)}</strong></div>
             </div>
           </div>
         `;
@@ -1686,6 +1770,8 @@
           <div class="metric"><span>Customers</span><strong>${bankState.customers}</strong></div>
           <div class="metric"><span>Offer</span><strong>${percent(bankState.rateOffer)}</strong></div>
           <div class="metric"><span>Trust</span><strong>${bankState.trust}/100</strong></div>
+          <div class="metric"><span>Capital</span><strong>${money(bankState.capital || 0)}</strong></div>
+          <div class="metric danger"><span>Debt / owed</span><strong>${money(bankState.debt || 0)}</strong></div>
         </div>
       `;
     }
@@ -1767,6 +1853,8 @@
     els.closeDeposits.addEventListener("click", closeDeposits);
     els.pauseGame.addEventListener("click", () => setPaused(true));
     els.resumeGame.addEventListener("click", () => setPaused(false));
+    els.skipTimer.addEventListener("click", skipTimerNow);
+    els.goBack.addEventListener("click", goBackPhase);
     els.endRound.addEventListener("click", endRound);
     els.triggerRumour.addEventListener("click", triggerRumour);
     els.endGame.addEventListener("click", endGame);
