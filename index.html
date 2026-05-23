@@ -186,6 +186,14 @@
       font-weight: 950;
     }
 
+    .projector-timer.paused {
+      width: 150px;
+      border-radius: var(--radius);
+      background: var(--amber);
+      color: #241700;
+      font-size: 1.35rem;
+    }
+
     .projector-tile {
       min-height: 140px;
       padding: 22px;
@@ -200,6 +208,23 @@
       margin-bottom: 8px;
       color: var(--navy);
       font-size: 1.3rem;
+    }
+
+    .disclaimer {
+      margin-top: 14px;
+      padding: 14px;
+      border-radius: var(--radius);
+      border: 1px solid rgba(245, 166, 35, 0.42);
+      background: rgba(245, 166, 35, 0.14);
+      color: var(--ink);
+      font-size: 0.92rem;
+      font-weight: 760;
+    }
+
+    .projector-disclaimer {
+      border-color: rgba(255, 255, 255, 0.24);
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.88);
     }
 
     .card {
@@ -1058,6 +1083,7 @@
         <div class="work-title">A Very Short Introduction - Banking &amp; Finance</div>
         <div class="work-subtitle">Interactive classroom activity: Run Your Bank</div>
         <div class="work-subtitle">Prepared for the English presentation project - KSA</div>
+        <div class="disclaimer">Disclaimer: This game is simplified for explanation and time-restraint purposes. In reality, central banks, regulation, deposit insurance, interbank lending, and longer-term loan contracts would also shape how banks survive stress. The core idea remains: banks must balance profitability, liquidity, risk, and trust.</div>
       </div>
     </footer>
   </div>
@@ -1767,6 +1793,12 @@
       return Math.max(0, Math.ceil((game.countdownEndsAt - Date.now()) / 1000));
     }
 
+    function presenterTimerText(game) {
+      if (!game) return null;
+      if (game.paused) return "PAUSED";
+      return currentCountdown(game);
+    }
+
     function renderTimer() {
       const game = snapshot.game;
       const left = currentCountdown(game);
@@ -2234,7 +2266,7 @@
         return [
           ["Join", "Students enter their name. The first two become bankers; everyone else becomes a customer."],
           ["Deposit choice", "Customers compare interest offers and trust levels before choosing Bank A or Bank B."],
-          ["Presenter action", "Close deposits when everyone has joined and chosen a bank."]
+          ["Model note", "The simulation is simplified for explanation and time limits. Real banking also includes central banks, regulation, deposit insurance, and interbank lending."]
         ];
       }
       if (game.phase === "investment") {
@@ -2267,17 +2299,20 @@
 
     function renderProjector(game) {
       setScreen(els.projectorScreen);
-      const left = currentCountdown(game);
-      els.projectorTimer.classList.toggle("hidden", left === null);
-      if (left !== null) els.projectorTimer.textContent = left;
-      els.projectorKicker.textContent = `Round ${game.round} - ${game.phase}`;
+      const timerText = presenterTimerText(game);
+      els.projectorTimer.classList.toggle("hidden", timerText === null);
+      els.projectorTimer.classList.toggle("paused", timerText === "PAUSED");
+      if (timerText !== null) els.projectorTimer.textContent = timerText;
+      els.projectorKicker.textContent = `Round ${game.round} - ${game.phase}${game.paused ? " - Paused" : ""}`;
       els.projectorTitle.textContent = game.phase === "leaderboard" ? "Final ranking" : "Run Your Bank";
       els.projectorSubtitle.textContent = game.phase === "leaderboard"
         ? "Student or bank with the most money wins."
-        : "Watch the current phase and use this screen for class discussion.";
+        : game.paused
+          ? "The game is paused by the presenter."
+          : "Watch the current phase and use this screen for class discussion.";
       els.projectorTiles.innerHTML = explanationTiles(game).map(tile => `
         <div class="projector-tile"><strong>${tile[0]}</strong><p class="lead">${tile[1]}</p></div>
-      `).join("");
+      `).join("") + `<div class="projector-tile"><strong>Disclaimer</strong><p class="lead">This is a simplified model for explanation and time-restraint purposes. Real banking also involves central banks, regulation, deposit insurance, interbank lending, and long-term loan contracts.</p></div>`;
       els.projectorLeaderboardCard.classList.toggle("hidden", game.phase !== "leaderboard");
       if (game.phase === "leaderboard") {
         const rows = leaderboardRows(game);
@@ -2324,6 +2359,10 @@
     firebase.database().ref(".info/connected").on("value", snap => {
       els.connectionPill.textContent = snap.val() ? "Connected OK" : "Connecting...";
     });
+
+    setInterval(() => {
+      if (presenterMode && snapshot.game) renderProjector(snapshot.game);
+    }, 500);
 
     roomRef.on("value", snap => {
       const data = snap.val() || {};
