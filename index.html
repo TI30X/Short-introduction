@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Run Your Bank</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%231E2761'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-family='Arial,sans-serif' font-size='24' font-weight='900' fill='white'%3ETZ%3C/text%3E%3C/svg%3E" />
+  <meta name="theme-color" content="#1E2761" />
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
   <style>
@@ -568,6 +570,52 @@
       font-size: 1.15rem;
     }
 
+    .work-status {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 22px;
+      align-items: center;
+      margin-top: 22px;
+      padding: 16px;
+      border-radius: var(--radius);
+      background: var(--navy);
+      color: white;
+      box-shadow: var(--shadow);
+    }
+
+    .tvz-mark {
+      min-width: 104px;
+      padding-right: 20px;
+      border-right: 1px solid rgba(255, 255, 255, 0.22);
+    }
+
+    .tvz-logo {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 2rem;
+      font-weight: 900;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .tvz-name {
+      margin-top: 8px;
+      color: rgba(255, 255, 255, 0.68);
+      font-size: 0.75rem;
+    }
+
+    .work-title {
+      color: white;
+      font-weight: 950;
+      font-size: 1.05rem;
+    }
+
+    .work-subtitle {
+      margin-top: 4px;
+      color: rgba(255, 255, 255, 0.68);
+      font-size: 0.88rem;
+      font-weight: 700;
+    }
+
     .rumour-modal {
       position: fixed;
       inset: 0;
@@ -785,6 +833,17 @@
       .flow-row strong {
         grid-column: 1 / -1;
       }
+
+      .work-status {
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
+      .tvz-mark {
+        border-right: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+        padding: 0 0 12px;
+      }
     }
   </style>
 </head>
@@ -911,6 +970,17 @@
         </div>
       </section>
     </main>
+    <footer class="work-status" aria-label="Project status">
+      <div class="tvz-mark">
+        <div class="tvz-logo">TvZ</div>
+        <div class="tvz-name">Timothy van Zanten</div>
+      </div>
+      <div>
+        <div class="work-title">Maturaarbeit - Status</div>
+        <div class="work-subtitle">Intels Verlust der technologischen Führungsposition</div>
+        <div class="work-subtitle">Herr Dirwächter - Kantonsschule Ausserschwyz - WR 2025/26</div>
+      </div>
+    </footer>
   </div>
 
   <script>
