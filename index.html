@@ -2053,6 +2053,60 @@
       return rows.sort((a, b) => b.score - a.score);
     }
 
+    function bankLeaderboardRows(game, bank) {
+      const bankState = game.banks?.[bank] || {};
+      const banker = bankerFor(bank);
+      const rows = [{
+        name: banker ? banker.name : bankNames[bank],
+        role: bankNames[bank],
+        score: Number(bankState.capital || 0) - Number(bankState.debt || 0)
+      }];
+      Object.values(snapshot.players || {}).forEach(player => {
+        if (player.role === "customer" && player.bank === bank) {
+          rows.push({
+            name: player.name,
+            role: "Customer",
+            score: Number(player.balance || 0) + Number(player.cash || 0) + Number(player.owed || 0)
+          });
+        }
+      });
+      return rows.sort((a, b) => b.score - a.score);
+    }
+
+    function cashLeaderboardRows() {
+      return Object.values(snapshot.players || {})
+        .filter(player => player.role === "customer" && !player.bank)
+        .map(player => ({
+          name: player.name,
+          role: "Cash / no bank",
+          score: Number(player.balance || 0) + Number(player.cash || 0) + Number(player.owed || 0)
+        }))
+        .sort((a, b) => b.score - a.score);
+    }
+
+    function rankingRowsHtml(rows) {
+      return rows.map((row, index) => `
+        <div class="person">
+          <div><strong>${index + 1}. ${row.name}</strong><small>${row.role}</small></div>
+          <strong>${money(row.score)}</strong>
+        </div>
+      `).join("") || `<div class="notice">No entries yet.</div>`;
+    }
+
+    function groupedLeaderboardHtml(game, useCards = true) {
+      const cashRows = cashLeaderboardRows();
+      const block = (title, rows) => useCards
+        ? `<div class="card pad"><h3>${title}</h3><div class="history" style="margin-top: 12px;">${rankingRowsHtml(rows)}</div></div>`
+        : `<div><h3>${title}</h3><div class="history" style="margin-top: 12px;">${rankingRowsHtml(rows)}</div></div>`;
+      return `
+        <div class="grid two">
+          ${block("Bank A ranking", bankLeaderboardRows(game, "A"))}
+          ${block("Bank B ranking", bankLeaderboardRows(game, "B"))}
+        </div>
+        ${cashRows.length ? block("Cash / withdrawn", cashRows) : ""}
+      `;
+    }
+
     function renderLeaderboard(game) {
       const rows = leaderboardRows(game);
       const winner = rows[0];
@@ -2062,16 +2116,7 @@
       els.playerContent.innerHTML = `
         <div class="grid">
           <div class="notice">Final ranking includes customer cash/balances/owed money and bank capital minus debt.</div>
-          <div class="card pad">
-            <div class="history">
-              ${rows.map((row, index) => `
-                <div class="person">
-                  <div><strong>${index + 1}. ${row.name}</strong><small>${row.role}</small></div>
-                  <strong>${money(row.score)}</strong>
-                </div>
-              `).join("")}
-            </div>
-          </div>
+          ${groupedLeaderboardHtml(game)}
         </div>
       `;
     }
@@ -2135,10 +2180,12 @@
       if (game.phase === "setup") {
         els.playerContent.innerHTML = `
           <div class="grid two">
-            ${bankChoiceCard("A", game.banks.A)}
-            ${bankChoiceCard("B", game.banks.B)}
+            ${bankChoiceCard("A", game.banks.A, player.bank)}
+            ${bankChoiceCard("B", game.banks.B, player.bank)}
           </div>
-          ${player.choiceMade ? `<div class="notice" style="margin-top: 12px;">Choice recorded: ${player.lastDecision || player.lastReport}</div>` : ""}
+          <div class="notice" style="margin-top: 12px;">
+            ${player.bank ? `Current choice: <strong>${bankNames[player.bank]}</strong>. You can still change banks until the presenter closes deposits.` : "No deposit chosen yet. Pick Bank A or Bank B before the presenter closes deposits."}
+          </div>
         `;
         bindChoiceButtons();
         return;
@@ -2201,15 +2248,16 @@
       renderWaiting(game.phase === "investment" ? "Bankers are choosing investments." : "The presenter is preparing the next round.");
     }
 
-    function bankChoiceCard(bank, bankState) {
+    function bankChoiceCard(bank, bankState, currentBank = "") {
       const className = bank === "A" ? "bank-a" : "bank-b";
+      const selected = currentBank === bank;
       return `
         <article class="bank-card ${className}">
           <h2>${bankNames[bank]}</h2>
           <div class="metric ${className}"><span>Offered interest</span><strong>${percent(bankState.rateOffer)}</strong></div>
           <div class="metric"><span>Trust level</span><strong>${bankState.trust}/100</strong></div>
-          <p class="lead">Deposit your CHF 1'000 here for Round 1.</p>
-          <button class="button ${className}" data-bank-choice="${bank}">Deposit at ${bankNames[bank]}</button>
+          <p class="lead">Bankers may still adjust this rate. You can change your choice until deposits close.</p>
+          <button class="button ${className} ${selected ? "selected" : ""}" data-bank-choice="${bank}">${selected ? "Selected" : "Choose"} ${bankNames[bank]}</button>
         </article>
       `;
     }
@@ -2422,13 +2470,7 @@
     }
 
     function renderAdminLeaderboard(game) {
-      const rows = leaderboardRows(game);
-      els.adminLeaderboard.innerHTML = rows.map((row, index) => `
-        <div class="person">
-          <div><strong>${index + 1}. ${row.name}</strong><small>${row.role}</small></div>
-          <strong>${money(row.score)}</strong>
-        </div>
-      `).join("") || `<div class="notice">Ranking appears when players join.</div>`;
+      els.adminLeaderboard.innerHTML = groupedLeaderboardHtml(game, false);
     }
 
     function participantRows() {
@@ -2503,13 +2545,7 @@
       els.projectorParticipants.innerHTML = participantRows();
       els.projectorLeaderboardCard.classList.toggle("hidden", game.phase !== "leaderboard");
       if (game.phase === "leaderboard") {
-        const rows = leaderboardRows(game);
-        els.projectorLeaderboard.innerHTML = rows.map((row, index) => `
-          <div class="person">
-            <div><strong>${index + 1}. ${row.name}</strong><small>${row.role}</small></div>
-            <strong>${money(row.score)}</strong>
-          </div>
-        `).join("");
+        els.projectorLeaderboard.innerHTML = groupedLeaderboardHtml(game, false);
       }
     }
 
