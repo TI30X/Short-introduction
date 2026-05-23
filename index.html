@@ -265,6 +265,13 @@
       filter: brightness(1.03);
     }
 
+    .button.selected,
+    .option.selected {
+      outline: 4px solid rgba(79, 195, 247, 0.28);
+      border: 1px solid var(--blue);
+      box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.12);
+    }
+
     .status-line {
       display: flex;
       flex-wrap: wrap;
@@ -397,11 +404,6 @@
     .option small {
       color: var(--muted);
       font-weight: 700;
-    }
-
-    .option.selected {
-      outline: 4px solid rgba(79, 195, 247, 0.24);
-      border-color: var(--blue);
     }
 
     .people-list {
@@ -878,9 +880,9 @@
         { id: "derivatives", name: "Leveraged Derivatives", shown: "+30% or -80%" }
       ],
       B: [
-        { id: "bonds", name: "Government Bonds", shown: "safe, +3%", returnRate: 0.03 },
-        { id: "smallBusiness", name: "Small Business Loans", shown: "medium, +6%", returnRate: 0.06 },
-        { id: "corporate", name: "Corporate Lending", shown: "medium-high, +8%", returnRate: 0.08 }
+        { id: "bonds", name: "Government Bonds", shown: "could lose 1% or win 4%", returnRate: 0.03 },
+        { id: "smallBusiness", name: "Small Business Loans", shown: "could lose 6% or win 12%", returnRate: 0.06 },
+        { id: "corporate", name: "Corporate Lending", shown: "could lose 6% or win 20%", returnRate: 0.08 }
       ]
     };
 
@@ -951,6 +953,7 @@
       players: {},
       presence: {}
     };
+    let autoAdvanceInFlight = false;
 
     function money(value) {
       const rounded = Math.round(Number(value) || 0);
@@ -976,9 +979,10 @@
         collapsedBank: "",
         countdownEndsAt: 0,
         banks: {
-          A: { rateOffer: 0.02, selectedInvestment: "", deposits: 0, customers: 0, cash: 0, assets: 0, lastReturn: 0, lastPaidRate: 0, solvent: true, trust: 100 },
+          A: { rateOffer: 0.04, selectedInvestment: "", deposits: 0, customers: 0, cash: 0, assets: 0, lastReturn: 0, lastPaidRate: 0, solvent: true, trust: 100 },
           B: { rateOffer: 0.01, selectedInvestment: "", deposits: 0, customers: 0, cash: 0, assets: 0, lastReturn: 0, lastPaidRate: 0, solvent: true, trust: 100 }
         },
+        lastResults: {},
         history: []
       };
     }
@@ -987,6 +991,13 @@
       const snap = await gameRef.get();
       if (!snap.exists()) {
         await gameRef.set(gameDefaults());
+      } else {
+        const game = snap.val() || {};
+        const updates = {};
+        if (!game.lastResults) updates.lastResults = {};
+        if (game.banks?.A && Number(game.banks.A.rateOffer || 0) < 0.04) updates["banks/A/rateOffer"] = 0.04;
+        if (game.banks?.B && Number(game.banks.B.rateOffer || 0) > 0.05) updates["banks/B/rateOffer"] = 0.05;
+        if (Object.keys(updates).length) await gameRef.update(updates);
       }
     }
 
@@ -1130,7 +1141,9 @@
     }
 
     async function updateBankRates(bank, value) {
-      const rate = Math.max(0, Math.min(0.12, Number(value) / 100));
+      const min = bank === "A" ? 0.04 : 0;
+      const max = bank === "A" ? 0.12 : 0.05;
+      const rate = Math.max(min, Math.min(max, Number(value) / 100));
       await gameRef.child(`banks/${bank}/rateOffer`).set(rate);
     }
 
@@ -1142,6 +1155,7 @@
         cash: 0,
         balance: Number(player.balance || CUSTOMER_DEPOSIT),
         choiceMade: true,
+        lastDecision: `Deposited at ${bankNames[bank]}`,
         lastReport: `You deposited with ${bankNames[bank]}.`,
         updatedAt: firebase.database.ServerValue.TIMESTAMP
       });
@@ -1156,29 +1170,41 @@
         updates.bank = "";
         updates.cash = Number(player.cash || 0) + Number(player.balance || 0);
         updates.balance = 0;
+        updates.lastDecision = "Withdrew all money";
         updates.lastReport = "You withdrew all your money and kept it as cash.";
       } else if (decision === "switch") {
         const nextBank = player.bank === "A" ? "B" : "A";
         updates.bank = nextBank;
+        updates.lastDecision = `Switched to ${bankNames[nextBank]}`;
         updates.lastReport = `You switched to ${bankNames[nextBank]}.`;
       } else {
+        updates.lastDecision = `Stayed with ${bankNames[player.bank]}`;
         updates.lastReport = `You stayed with ${bankNames[player.bank]}.`;
       }
       await playersRef.child(local.id).update(updates);
     }
 
     async function bankerPick(bank, optionId) {
-      await gameRef.child(`banks/${bank}/selectedInvestment`).set(optionId);
+      const option = investmentOptions[bank].find(item => item.id === optionId);
+      await gameRef.child(`banks/${bank}`).update({
+        selectedInvestment: optionId,
+        selectedLabel: option?.name || "Investment selected"
+      });
     }
 
     async function closeDeposits() {
       const game = snapshot.game;
       await playersRef.once("value").then(async snap => {
         const players = snap.val() || {};
+        const banks = recomputeBanks(players, game);
+        ["A", "B"].forEach(bank => {
+          banks[bank].selectedInvestment = "";
+          banks[bank].selectedLabel = "";
+        });
         await gameRef.update({
           phase: "investment",
           countdownEndsAt: Date.now() + TIMER_SECONDS * 1000,
-          banks: recomputeBanks(players, game)
+          banks
         });
       });
     }
@@ -1193,11 +1219,13 @@
 
     async function revealResults() {
       const game = snapshot.game;
+      if (!game || game.phase !== "investment") return;
       const playersSnap = await playersRef.get();
       const players = playersSnap.val() || {};
       const banks = recomputeBanks(players, game);
       const playerUpdates = {};
       const summaries = [];
+      const lastResults = {};
       let collapsedBank = "";
 
       ["A", "B"].forEach(bank => {
@@ -1213,18 +1241,29 @@
         banks[bank].lastPaidRate = paidRate;
         banks[bank].solvent = canPay;
         banks[bank].trust = Math.max(0, Math.min(100, (banks[bank].trust || 100) + (canPay ? 4 : -34)));
+        const label = investmentOptions[bank].find(option => option.id === selected)?.name || "No investment";
+        lastResults[bank] = {
+          label,
+          returnRate,
+          gain,
+          promisedRate: banks[bank].rateOffer,
+          paidRate,
+          canPay,
+          deposits: banks[bank].deposits,
+          customers: banks[bank].customers
+        };
 
         Object.values(players).filter(player => player.role === "customer" && player.bank === bank).forEach(player => {
           const interest = (Number(player.balance) || 0) * paidRate;
           playerUpdates[`${player.id}/balance`] = Number(player.balance || 0) + interest;
           playerUpdates[`${player.id}/lastInterest`] = interest;
           playerUpdates[`${player.id}/choiceMade`] = false;
+          playerUpdates[`${player.id}/lastDecision`] = "";
           playerUpdates[`${player.id}/lastReport`] = canPay
             ? `${bankNames[bank]} paid ${percent(paidRate)} interest this round.`
             : `⚠️ ${bankNames[bank]} could NOT pay the promised ${percent(banks[bank].rateOffer)}. It paid ${percent(paidRate)}.`;
         });
 
-        const label = investmentOptions[bank].find(option => option.id === selected)?.name || "No investment";
         summaries.push(`${bankNames[bank]} chose ${label}: ${returnRate >= 0 ? "+" : ""}${percent(returnRate)} return, paid ${percent(paidRate)} interest.`);
 
         if (bank === "A" && game.round >= 4 && !canPay && bankCustomers("A").length <= 1) {
@@ -1240,13 +1279,23 @@
 
       await playersRef.update(playerUpdates);
       await gameRef.update({
-        phase: collapsedBank ? "ended" : "decision",
+        phase: collapsedBank ? "ended" : "results",
         rumour: game.rumour || (game.round >= 4 && !banks.A.solvent),
         collapsedBank,
         ended: Boolean(collapsedBank),
-        countdownEndsAt: collapsedBank ? 0 : Date.now() + TIMER_SECONDS * 1000,
+        countdownEndsAt: collapsedBank ? 0 : Date.now() + 8000,
         banks,
+        lastResults,
         history
+      });
+    }
+
+    async function openCustomerDecisions() {
+      const game = snapshot.game;
+      if (!game || game.phase !== "results") return;
+      await gameRef.update({
+        phase: "decision",
+        countdownEndsAt: Date.now() + TIMER_SECONDS * 1000
       });
     }
 
@@ -1273,7 +1322,15 @@
       const players = snapshot.players || {};
       const resetChoices = {};
       Object.values(players).forEach(player => {
-        if (player.role === "customer") resetChoices[`${player.id}/choiceMade`] = false;
+        if (player.role === "customer") {
+          resetChoices[`${player.id}/choiceMade`] = false;
+          resetChoices[`${player.id}/lastDecision`] = "";
+        }
+      });
+      const banks = recomputeBanks(players, game);
+      ["A", "B"].forEach(bank => {
+        banks[bank].selectedInvestment = "";
+        banks[bank].selectedLabel = "";
       });
       await playersRef.update(resetChoices);
       await gameRef.update({
@@ -1281,7 +1338,8 @@
         round: game.phase === "decision" || game.phase === "results" ? game.round + 1 : game.round,
         countdownEndsAt: Date.now() + TIMER_SECONDS * 1000,
         paused: false,
-        banks: recomputeBanks(players, game)
+        banks,
+        lastResults: {}
       });
     }
 
@@ -1298,6 +1356,7 @@
     async function endRound() {
       if (!snapshot.game) return;
       if (snapshot.game.phase === "investment") await revealResults();
+      else if (snapshot.game.phase === "results") await openCustomerDecisions();
       else if (snapshot.game.phase === "decision") await startRound();
     }
 
@@ -1343,8 +1402,21 @@
           timer.classList.toggle("hot", left <= 5);
         }
       });
-      if (left === 0 && local.isAdmin && game.phase === "investment") revealResults();
-      if (left === 0 && local.isAdmin && game.phase === "decision") startRound();
+      if (left === 0 && isAdminView()) autoAdvancePhase(game.phase);
+    }
+
+    async function autoAdvancePhase(phase) {
+      if (autoAdvanceInFlight) return;
+      autoAdvanceInFlight = true;
+      try {
+        if (phase === "investment") await revealResults();
+        else if (phase === "results") await openCustomerDecisions();
+        else if (phase === "decision") await startRound();
+      } finally {
+        setTimeout(() => {
+          autoAdvanceInFlight = false;
+        }, 1200);
+      }
     }
 
     function renderWaiting(text = "Waiting for the next classroom move.") {
@@ -1356,6 +1428,48 @@
             <p class="lead">${text}</p>
           </div>
         </div>
+      `;
+    }
+
+    function renderRoundResults(player, game) {
+      const bank = player.bank || "";
+      const mine = bank ? game.lastResults?.[bank] : null;
+      const resultA = game.lastResults?.A || {};
+      const resultB = game.lastResults?.B || {};
+      els.playerRole.textContent = player.role === "banker" ? `Banker ${player.bank}` : "Round results";
+      els.playerTitle.textContent = `Round ${game.round} results`;
+      els.playerSubtitle.textContent = "Review the stats. Customer decisions open next, just like a quiz results screen.";
+      els.playerContent.innerHTML = `
+        <div class="grid">
+          <div class="notice ${mine && !mine.canPay ? "danger" : ""}">
+            ${player.role === "customer"
+              ? (player.lastReport || "Round results are in.")
+              : `${bankNames[player.bank]} result: ${mine?.returnRate >= 0 ? "+" : ""}${percent(mine?.returnRate || 0)} investment return.`}
+          </div>
+          <div class="grid two">
+            ${roundResultCard("A", resultA)}
+            ${roundResultCard("B", resultB)}
+          </div>
+          <div class="grid three">
+            <div class="metric"><span>Your bank</span><strong>${bank ? bankNames[bank] : "Cash"}</strong></div>
+            <div class="metric bank-b"><span>Your interest</span><strong>${money(player.lastInterest || 0)}</strong></div>
+            <div class="metric"><span>Your balance</span><strong>${money((player.balance || 0) + (player.cash || 0))}</strong></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function roundResultCard(bank, result) {
+      const className = bank === "A" ? "bank-a" : "bank-b";
+      return `
+        <article class="bank-card ${className}">
+          <h3>${bankNames[bank]}</h3>
+          <div class="metric ${className}"><span>Investment</span><strong>${result.label || "No choice"}</strong></div>
+          <div class="grid two">
+            <div class="metric"><span>Return</span><strong>${result.returnRate >= 0 ? "+" : ""}${percent(result.returnRate || 0)}</strong></div>
+            <div class="metric ${result.canPay === false ? "danger" : "bank-b"}"><span>Paid interest</span><strong>${percent(result.paidRate || 0)}</strong></div>
+          </div>
+        </article>
       `;
     }
 
@@ -1372,8 +1486,14 @@
             ${bankChoiceCard("A", game.banks.A.rateOffer)}
             ${bankChoiceCard("B", game.banks.B.rateOffer)}
           </div>
+          ${player.choiceMade ? `<div class="notice" style="margin-top: 12px;">Choice recorded: ${player.lastDecision || player.lastReport}</div>` : ""}
         `;
         bindChoiceButtons();
+        return;
+      }
+
+      if (game.phase === "results") {
+        renderRoundResults(player, game);
         return;
       }
 
@@ -1382,15 +1502,16 @@
         els.playerContent.innerHTML = `
           <div class="grid">
             <div class="notice ${game.rumour ? "warning" : ""}">${player.lastReport || "Review your bank's result."}</div>
+            ${player.choiceMade ? `<div class="notice">Choice recorded: ${player.lastDecision}</div>` : ""}
             <div class="grid three">
               <div class="metric"><span>Your balance</span><strong>${money(player.balance)}</strong></div>
               <div class="metric"><span>Your bank</span><strong>${player.bank ? bankNames[player.bank] : "Cash"}</strong></div>
               <div class="metric bank-b"><span>Interest earned</span><strong>${money(player.lastInterest)}</strong></div>
             </div>
             <div class="grid three">
-              <button class="button bank-b" data-decision="stay" ${!player.bank ? "disabled" : ""}>✅ Stay</button>
-              <button class="button bank-a" data-decision="switch" ${!player.bank ? "disabled" : ""}>Switch to ${bankNames[other] || "a bank"}</button>
-              <button class="button danger" data-decision="withdraw">Withdraw all 💰</button>
+              <button class="button bank-b ${player.lastDecision?.startsWith("Stayed") ? "selected" : ""}" data-decision="stay" ${!player.bank || player.choiceMade ? "disabled" : ""}>✅ Stay</button>
+              <button class="button bank-a ${player.lastDecision?.startsWith("Switched") ? "selected" : ""}" data-decision="switch" ${!player.bank || player.choiceMade ? "disabled" : ""}>Switch to ${bankNames[other] || "a bank"}</button>
+              <button class="button danger ${player.lastDecision?.startsWith("Withdrew") ? "selected" : ""}" data-decision="withdraw" ${player.choiceMade ? "disabled" : ""}>Withdraw all 💰</button>
             </div>
           </div>
         `;
@@ -1435,12 +1556,14 @@
       els.playerSubtitle.textContent = game.phase === "setup" ? "Set the interest rate offer customers will see." : `${bankNames[bank]} dashboard. Choose how to invest deposits this round.`;
 
       if (game.phase === "setup") {
+        const minRate = bank === "A" ? 4 : 0;
+        const maxRate = bank === "A" ? 12 : 5;
         els.playerContent.innerHTML = `
           <div class="card pad">
             <label for="rateOffer">Interest rate offer</label>
-            <input id="rateOffer" type="range" min="0" max="12" step="0.5" value="${bankState.rateOffer * 100}" />
+            <input id="rateOffer" type="range" min="${minRate}" max="${maxRate}" step="0.5" value="${bankState.rateOffer * 100}" />
             <div class="metric ${className}" style="margin-top: 14px;"><span>Customer offer</span><strong id="rateOfferLabel">${percent(bankState.rateOffer)}</strong></div>
-            <div class="notice" style="margin-top: 14px;">Customers will choose one bank when the teacher closes deposits.</div>
+            <div class="notice" style="margin-top: 14px;">Range: ${minRate}% to ${maxRate}%. Customers will choose one bank when the teacher closes deposits.</div>
           </div>
         `;
         const rate = document.getElementById("rateOffer");
@@ -1461,6 +1584,7 @@
             </div>
             <div class="card pad">
               <h3>Investment options</h3>
+              ${bankState.selectedInvestment ? `<div class="notice" style="margin-top: 12px;">Choice recorded: ${bankState.selectedLabel || "Investment selected"}</div>` : ""}
               <div class="option-list">
                 ${options.map(option => `
                   <button class="option ${bankState.selectedInvestment === option.id ? "selected" : ""}" data-investment="${option.id}">
@@ -1475,6 +1599,11 @@
         document.querySelectorAll("[data-investment]").forEach(button => {
           button.addEventListener("click", () => bankerPick(bank, button.dataset.investment));
         });
+        return;
+      }
+
+      if (game.phase === "results") {
+        renderRoundResults(player, game);
         return;
       }
 
