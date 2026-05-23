@@ -752,6 +752,7 @@
           <div class="card join-panel">
             <h2>Join the game</h2>
             <p class="lead">Enter your name. The first two students become bankers automatically; everyone else becomes a customer.</p>
+            <div class="notice hidden" id="testModeNotice" style="margin-top: 14px;">Testing mode: each browser tab can join as a separate player.</div>
             <div class="field" style="margin-top: 18px;">
               <label for="playerName">Your name</label>
               <input id="playerName" maxlength="28" placeholder="e.g. Lina" autocomplete="name" />
@@ -899,6 +900,7 @@
       playerName: document.getElementById("playerName"),
       joinGame: document.getElementById("joinGame"),
       joinNotice: document.getElementById("joinNotice"),
+      testModeNotice: document.getElementById("testModeNotice"),
       playerRole: document.getElementById("playerRole"),
       playerTitle: document.getElementById("playerTitle"),
       playerSubtitle: document.getElementById("playerSubtitle"),
@@ -928,18 +930,21 @@
     };
 
     const urlParams = new URLSearchParams(location.search);
-    const storedRole = localStorage.getItem("runYourBankRole") || "";
+    const testMode = urlParams.get("test") === "true";
+    const storage = testMode ? sessionStorage : localStorage;
+    const idKey = testMode ? "runYourBankTestPlayerId" : "runYourBankPlayerId";
+    const storedRole = storage.getItem("runYourBankRole") || "";
     let local = {
-      id: localStorage.getItem("runYourBankPlayerId") || crypto.randomUUID(),
+      id: storage.getItem(idKey) || crypto.randomUUID(),
       role: storedRole === "admin" && urlParams.get("admin") !== "true" ? "" : storedRole,
-      bank: localStorage.getItem("runYourBankBank") || "",
+      bank: storage.getItem("runYourBankBank") || "",
       isAdmin: false
     };
+    storage.setItem(idKey, local.id);
     if (storedRole === "admin" && urlParams.get("admin") !== "true") {
-      localStorage.removeItem("runYourBankRole");
-      localStorage.removeItem("runYourBankBank");
+      storage.removeItem("runYourBankRole");
+      storage.removeItem("runYourBankBank");
     }
-    localStorage.setItem("runYourBankPlayerId", local.id);
 
     let snapshot = {
       game: null,
@@ -1071,9 +1076,9 @@
       local.role = role;
       local.bank = bank;
       local.isAdmin = false;
-      localStorage.setItem("runYourBankRole", role);
-      localStorage.setItem("runYourBankBank", bank);
-      localStorage.setItem("runYourBankName", name);
+      storage.setItem("runYourBankRole", role);
+      storage.setItem("runYourBankBank", bank);
+      storage.setItem("runYourBankName", name);
       const myPresence = presenceRef.child(local.id);
       await myPresence.set(true);
       myPresence.onDisconnect().set(false);
@@ -1086,7 +1091,6 @@
     function enterAdmin() {
       local.isAdmin = true;
       local.role = "admin";
-      localStorage.setItem("runYourBankRole", "admin");
       setScreen(els.adminScreen);
       render();
     }
@@ -1309,11 +1313,15 @@
       await gameRef.update({ phase: "ended", ended: true, countdownEndsAt: 0 });
     }
 
+    function isAdminView() {
+      return local.isAdmin && urlParams.get("admin") === "true";
+    }
+
     async function resetGame() {
       if (!confirm("Reset the classroom game for everyone?")) return;
       await roomRef.set({ game: gameDefaults(), players: {}, presence: {} });
-      localStorage.removeItem("runYourBankRole");
-      localStorage.removeItem("runYourBankBank");
+      storage.removeItem("runYourBankRole");
+      storage.removeItem("runYourBankBank");
       local.role = "";
       local.bank = "";
       local.isAdmin = false;
@@ -1493,20 +1501,38 @@
     }
 
     function renderEndForPlayer(player, game) {
-      if (game.collapsedBank === "A") {
-        setScreen(els.collapseScreen);
-        return;
-      }
+      els.playerRole.textContent = player.role === "banker" ? `Banker ${player.bank}` : "Customer";
+      els.playerTitle.textContent = game.collapsedBank === "A" ? "Bank A has collapsed 💥" : "Game ended";
+      els.playerSubtitle.textContent = "Your screen now shows only your game statistics.";
+      const bank = player.bank || "";
+      const bankState = bank ? game.banks[bank] : null;
+      const total = Number(player.balance || 0) + Number(player.cash || 0);
       els.playerContent.innerHTML = `
-        <div class="card pad">
-          <h2>Game ended</h2>
-          <p class="lead">Final balance: ${money(player.balance || player.cash || 0)}</p>
+        <div class="grid">
+          <div class="notice ${game.collapsedBank === "A" ? "danger" : ""}">
+            ${game.collapsedBank === "A"
+              ? "💥 Bank A collapsed after withdrawals exceeded available cash."
+              : "The teacher has ended the game."}
+          </div>
+          <div class="grid three">
+            <div class="metric"><span>Your role</span><strong>${player.role === "banker" ? bankNames[player.bank] : "Customer"}</strong></div>
+            <div class="metric bank-b"><span>Final money</span><strong>${money(total)}</strong></div>
+            <div class="metric"><span>Final bank</span><strong>${bank ? bankNames[bank] : "Cash"}</strong></div>
+          </div>
+          ${bankState ? `
+            <div class="grid three">
+              <div class="metric"><span>Bank deposits</span><strong>${money(bankState.deposits)}</strong></div>
+              <div class="metric"><span>Customers</span><strong>${bankState.customers}</strong></div>
+              <div class="metric ${bankState.solvent ? "bank-b" : "danger"}"><span>Status</span><strong>${bankState.solvent ? "✅ Paid" : "⚠️ Failed"}</strong></div>
+            </div>
+          ` : ""}
         </div>
       `;
     }
 
     function renderAdmin(game) {
       setScreen(game.collapsedBank === "A" ? els.collapseScreen : els.adminScreen);
+      els.backToAdmin.classList.toggle("hidden", !isAdminView());
       els.adminPhaseLine.textContent = `${game.phase.toUpperCase()} • Round ${game.round}${game.paused ? " • Paused" : ""}`;
       const banks = recomputeBanks(snapshot.players, game);
       renderAdminBank("A", banks.A, els.adminBankA);
@@ -1573,9 +1599,14 @@
       renderTimer();
 
       if (local.isAdmin || local.role === "admin") {
-        local.isAdmin = true;
-        renderAdmin(game);
-        return;
+        if (isAdminView()) {
+          local.isAdmin = true;
+          renderAdmin(game);
+          return;
+        }
+        local.isAdmin = false;
+        local.role = "";
+        storage.removeItem("runYourBankRole");
       }
 
       const player = myPlayer();
@@ -1611,12 +1642,18 @@
     els.triggerRumour.addEventListener("click", triggerRumour);
     els.endGame.addEventListener("click", endGame);
     els.resetGame.addEventListener("click", resetGame);
-    els.backToAdmin.addEventListener("click", () => setScreen(els.adminScreen));
+    els.backToAdmin.addEventListener("click", () => {
+      if (isAdminView()) setScreen(els.adminScreen);
+    });
 
     ensureGame();
 
-    if (localStorage.getItem("runYourBankName")) {
-      els.playerName.value = localStorage.getItem("runYourBankName");
+    if (storage.getItem("runYourBankName")) {
+      els.playerName.value = storage.getItem("runYourBankName");
+    }
+
+    if (testMode) {
+      els.testModeNotice.classList.remove("hidden");
     }
 
     if (urlParams.get("admin") === "true") {
