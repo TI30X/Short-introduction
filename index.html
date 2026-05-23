@@ -145,6 +145,63 @@
       align-items: start;
     }
 
+    .projector-wrap {
+      min-height: 72vh;
+      display: grid;
+      gap: 18px;
+      align-content: start;
+    }
+
+    .projector-hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      padding: clamp(24px, 5vw, 44px);
+      background: var(--navy);
+      color: white;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .projector-hero h1,
+    .projector-hero h2 {
+      color: white;
+    }
+
+    .projector-hero .lead {
+      color: rgba(255, 255, 255, 0.78);
+    }
+
+    .projector-timer {
+      display: grid;
+      place-items: center;
+      width: 112px;
+      height: 112px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: white;
+      color: var(--navy);
+      font-size: 3rem;
+      font-weight: 950;
+    }
+
+    .projector-tile {
+      min-height: 140px;
+      padding: 22px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: white;
+      box-shadow: var(--shadow);
+    }
+
+    .projector-tile strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--navy);
+      font-size: 1.3rem;
+    }
+
     .card {
       background: var(--card);
       border: 1px solid var(--line);
@@ -887,7 +944,7 @@
           <div>
             <p class="kicker" id="playerRole">Customer</p>
             <h2 id="playerTitle">Welcome</h2>
-            <p class="lead" id="playerSubtitle">Waiting for the teacher to begin.</p>
+            <p class="lead" id="playerSubtitle">Waiting for the presenter to begin.</p>
           </div>
           <div class="timer hidden" id="playerTimer">20</div>
         </div>
@@ -897,7 +954,7 @@
       <section class="screen" id="adminScreen">
         <div class="phase-header">
           <div>
-            <p class="kicker">Teacher projector panel</p>
+            <p class="kicker">Presenter control panel</p>
             <h2>Admin Dashboard</h2>
             <p class="lead" id="adminPhaseLine">Set up the class, then start the pressure.</p>
           </div>
@@ -961,6 +1018,24 @@
               <div class="people-list" id="adminPlayers" style="margin-top: 12px;"></div>
             </div>
           </aside>
+        </div>
+      </section>
+
+      <section class="screen" id="projectorScreen">
+        <div class="projector-wrap">
+          <div class="projector-hero">
+            <div>
+              <p class="kicker" id="projectorKicker">Presenter screen</p>
+              <h1 id="projectorTitle">Run Your Bank</h1>
+              <p class="lead" id="projectorSubtitle">Mirror this page at the front of the room.</p>
+            </div>
+            <div class="projector-timer hidden" id="projectorTimer">20</div>
+          </div>
+          <div class="grid three" id="projectorTiles"></div>
+          <div class="card pad hidden" id="projectorLeaderboardCard">
+            <h3>Final ranking</h3>
+            <div class="history" id="projectorLeaderboard" style="margin-top: 12px;"></div>
+          </div>
         </div>
       </section>
 
@@ -1042,6 +1117,7 @@
       joinScreen: document.getElementById("joinScreen"),
       playerScreen: document.getElementById("playerScreen"),
       adminScreen: document.getElementById("adminScreen"),
+      projectorScreen: document.getElementById("projectorScreen"),
       collapseScreen: document.getElementById("collapseScreen"),
       playerName: document.getElementById("playerName"),
       joinGame: document.getElementById("joinGame"),
@@ -1077,8 +1153,16 @@
       resetGame: document.getElementById("resetGame"),
       backToAdmin: document.getElementById("backToAdmin")
     };
+    els.projectorKicker = document.getElementById("projectorKicker");
+    els.projectorTitle = document.getElementById("projectorTitle");
+    els.projectorSubtitle = document.getElementById("projectorSubtitle");
+    els.projectorTimer = document.getElementById("projectorTimer");
+    els.projectorTiles = document.getElementById("projectorTiles");
+    els.projectorLeaderboardCard = document.getElementById("projectorLeaderboardCard");
+    els.projectorLeaderboard = document.getElementById("projectorLeaderboard");
 
     const urlParams = new URLSearchParams(location.search);
+    const presenterMode = urlParams.get("presenter") === "true" || urlParams.get("projector") === "true";
     const testMode = urlParams.get("test") === "true";
     const storage = testMode ? sessionStorage : localStorage;
     const idKey = testMode ? "runYourBankTestPlayerId" : "runYourBankPlayerId";
@@ -1156,7 +1240,7 @@
     }
 
     function setScreen(target) {
-      [els.joinScreen, els.playerScreen, els.adminScreen, els.collapseScreen].forEach(screen => screen.classList.remove("active"));
+      [els.joinScreen, els.playerScreen, els.adminScreen, els.projectorScreen, els.collapseScreen].forEach(screen => screen.classList.remove("active"));
       target.classList.add("active");
     }
 
@@ -1912,7 +1996,7 @@
         return;
       }
 
-      renderWaiting(game.phase === "investment" ? "Bankers are choosing investments." : "The teacher is preparing the next round.");
+      renderWaiting(game.phase === "investment" ? "Bankers are choosing investments." : "The presenter is preparing the next round.");
     }
 
     function bankChoiceCard(bank, bankState) {
@@ -1951,7 +2035,7 @@
             <input id="rateOffer" type="range" min="${minRate}" max="${maxRate}" step="0.5" value="${bankState.rateOffer * 100}" />
             <div class="metric ${className}" style="margin-top: 14px;"><span>Customer offer</span><strong id="rateOfferLabel">${percent(bankState.rateOffer)}</strong></div>
             <div class="metric" style="margin-top: 14px;"><span>Starting capital insurance</span><strong>${money(bankState.capital ?? STARTING_CAPITAL)}</strong></div>
-            <div class="notice" style="margin-top: 14px;">Range: ${minRate}% to ${maxRate}%. Customers will choose one bank when the teacher closes deposits.</div>
+            <div class="notice" style="margin-top: 14px;">Range: ${minRate}% to ${maxRate}%. Customers will choose one bank when the presenter closes deposits.</div>
           </div>
         `;
         const rate = document.getElementById("rateOffer");
@@ -2036,7 +2120,7 @@
         return;
       }
 
-      renderWaiting("Waiting for the teacher.");
+      renderWaiting("Waiting for the presenter.");
     }
 
     function renderEndForPlayer(player, game) {
@@ -2051,7 +2135,7 @@
           <div class="notice ${game.collapsedBank === "A" ? "danger" : ""}">
             ${game.collapsedBank
               ? `💥 ${bankNames[game.collapsedBank]} collapsed after withdrawals exceeded available cash. Leaderboard appears in a few seconds.`
-              : "The teacher has ended the game."}
+              : "The presenter has ended the game."}
           </div>
           <div class="grid three">
             <div class="metric"><span>Your role</span><strong>${player.role === "banker" ? bankNames[player.bank] : "Customer"}</strong></div>
@@ -2145,10 +2229,75 @@
       `).join("") || `<div class="notice">Ranking appears when players join.</div>`;
     }
 
+    function explanationTiles(game) {
+      if (game.phase === "setup") {
+        return [
+          ["Join", "Students enter their name. The first two become bankers; everyone else becomes a customer."],
+          ["Deposit choice", "Customers compare interest offers and trust levels before choosing Bank A or Bank B."],
+          ["Presenter action", "Close deposits when everyone has joined and chosen a bank."]
+        ];
+      }
+      if (game.phase === "investment") {
+        return [
+          ["Banker decision", "Each bank chooses one investment option. Higher upside usually means higher downside."],
+          ["Customer money vs capital", "Banks invest loanable customer deposits and their own capital, but these are tracked separately."],
+          ["Risk", "A loss can reduce trust even if the bank still pays interest."]
+        ];
+      }
+      if (game.phase === "decision") {
+        return [
+          ["Stay", "Keep your money at the same bank if you still trust it."],
+          ["Switch", "Move your balance to the other bank for the next round."],
+          ["Withdraw", "Leave the banks and hold cash. Too many withdrawals can trigger a bank run."]
+        ];
+      }
+      if (game.phase === "ended") {
+        return [
+          ["Bank run", "A bank collapsed because withdrawals exceeded available cash."],
+          ["Fractional reserves", "Banks lend out part of deposits, so they cannot repay everyone at once."],
+          ["Next", "The final ranking will appear shortly."]
+        ];
+      }
+      return [
+        ["Winner", "The participant with the most money wins."],
+        ["Customers", "Score includes balance, cash, and money still owed to them."],
+        ["Banks", "Score is bank capital minus debt."]
+      ];
+    }
+
+    function renderProjector(game) {
+      setScreen(els.projectorScreen);
+      const left = currentCountdown(game);
+      els.projectorTimer.classList.toggle("hidden", left === null);
+      if (left !== null) els.projectorTimer.textContent = left;
+      els.projectorKicker.textContent = `Round ${game.round} - ${game.phase}`;
+      els.projectorTitle.textContent = game.phase === "leaderboard" ? "Final ranking" : "Run Your Bank";
+      els.projectorSubtitle.textContent = game.phase === "leaderboard"
+        ? "Student or bank with the most money wins."
+        : "Watch the current phase and use this screen for class discussion.";
+      els.projectorTiles.innerHTML = explanationTiles(game).map(tile => `
+        <div class="projector-tile"><strong>${tile[0]}</strong><p class="lead">${tile[1]}</p></div>
+      `).join("");
+      els.projectorLeaderboardCard.classList.toggle("hidden", game.phase !== "leaderboard");
+      if (game.phase === "leaderboard") {
+        const rows = leaderboardRows(game);
+        els.projectorLeaderboard.innerHTML = rows.map((row, index) => `
+          <div class="person">
+            <div><strong>${index + 1}. ${row.name}</strong><small>${row.role}</small></div>
+            <strong>${money(row.score)}</strong>
+          </div>
+        `).join("");
+      }
+    }
+
     function render() {
       const game = snapshot.game;
       if (!game) return;
       els.roundPill.textContent = `Round ${game.round} - ${game.phase}`;
+      if (presenterMode) {
+        renderProjector(game);
+        return;
+      }
       renderTimer();
 
       if (local.isAdmin || local.role === "admin") {
@@ -2217,5 +2366,6 @@
   </script>
 </body>
 </html>
+
 
 
