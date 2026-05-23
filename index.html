@@ -934,6 +934,10 @@
               <h3>Round history</h3>
               <div class="history" id="roundHistory" style="margin-top: 12px;"></div>
             </div>
+            <div class="card pad">
+              <h3>Final ranking</h3>
+              <div class="history" id="adminLeaderboard" style="margin-top: 12px;"></div>
+            </div>
           </div>
 
           <aside class="grid">
@@ -1059,6 +1063,7 @@
       barBLabel: document.getElementById("barBLabel"),
       barCashLabel: document.getElementById("barCashLabel"),
       roundHistory: document.getElementById("roundHistory"),
+      adminLeaderboard: document.getElementById("adminLeaderboard"),
       adminPlayers: document.getElementById("adminPlayers"),
       startRound: document.getElementById("startRound"),
       closeDeposits: document.getElementById("closeDeposits"),
@@ -2065,12 +2070,7 @@
     }
 
     function renderAdmin(game) {
-      if (game.phase === "leaderboard") {
-        setScreen(els.playerScreen);
-        renderLeaderboard(game);
-        return;
-      }
-      setScreen(game.collapsedBank ? els.collapseScreen : els.adminScreen);
+      setScreen(els.adminScreen);
       document.querySelector("#collapseScreen h1").textContent = `${bankNames[game.collapsedBank] || "A bank"} HAS COLLAPSED`;
       els.backToAdmin.classList.toggle("hidden", !isAdminView());
       els.adminPhaseLine.textContent = `${game.phase.toUpperCase()} - Round ${game.round}${game.paused ? " - Paused" : ""}`;
@@ -2080,6 +2080,7 @@
       renderBars(banks);
       renderPlayers();
       renderHistory(game.history || []);
+      renderAdminLeaderboard(game);
     }
 
     function renderAdminBank(bank, bankState, el) {
@@ -2132,6 +2133,16 @@
       els.roundHistory.innerHTML = history.slice().reverse().map(item => `
         <div class="history-item"><strong>Round ${item.round}:</strong> ${item.text}</div>
       `).join("") || `<div class="notice">No rounds completed yet.</div>`;
+    }
+
+    function renderAdminLeaderboard(game) {
+      const rows = leaderboardRows(game);
+      els.adminLeaderboard.innerHTML = rows.map((row, index) => `
+        <div class="person">
+          <div><strong>${index + 1}. ${row.name}</strong><small>${row.role}</small></div>
+          <strong>${money(row.score)}</strong>
+        </div>
+      `).join("") || `<div class="notice">Ranking appears when players join.</div>`;
     }
 
     function render() {
