@@ -91,6 +91,7 @@
       min-width: 0;
       color: var(--navy);
       font-weight: 900;
+      white-space: nowrap;
     }
 
     .logo {
@@ -102,7 +103,9 @@
       border-radius: var(--radius);
       background: var(--navy);
       color: white;
-      font-size: 1.25rem;
+      font-size: 0.95rem;
+      font-weight: 950;
+      letter-spacing: 0;
       box-shadow: 0 10px 26px rgba(30, 39, 97, 0.22);
     }
 
@@ -118,6 +121,8 @@
       color: var(--muted);
       font-weight: 800;
       white-space: nowrap;
+      min-width: max-content;
+      max-width: none;
     }
 
     .grid {
@@ -626,13 +631,14 @@
 
       .status-line {
         width: 100%;
-        justify-content: space-between;
+        justify-content: flex-end;
+        gap: 8px;
       }
 
       .pill {
         min-height: 32px;
         padding: 0 10px;
-        font-size: 0.86rem;
+        font-size: 0.82rem;
       }
 
       .role-buttons {
@@ -753,7 +759,7 @@
   <div class="app">
     <header class="topbar">
       <div class="brand">
-        <div class="logo">ðŸ¦</div>
+        <div class="logo">RYB</div>
         <span>Run Your Bank</span>
       </div>
       <div class="status-line">
@@ -1923,7 +1929,7 @@
             <div class="grid three">
               <div class="metric"><span>Bank deposits</span><strong>${money(bankState.deposits)}</strong></div>
               <div class="metric"><span>Customers</span><strong>${bankState.customers}</strong></div>
-              <div class="metric ${bankState.solvent ? "bank-b" : "danger"}"><span>Status</span><strong>${bankState.solvent ? "âœ… Paid" : "âš ï¸ Failed"}</strong></div>
+              <div class="metric ${bankState.solvent ? "bank-b" : "danger"}"><span>Status</span><strong>${bankState.solvent ? "Paid" : "Failed"}</strong></div>
             </div>
           ` : ""}
         </div>
@@ -1939,7 +1945,7 @@
       setScreen(game.collapsedBank ? els.collapseScreen : els.adminScreen);
       document.querySelector("#collapseScreen h1").textContent = `💥 ${bankNames[game.collapsedBank] || "A bank"} HAS COLLAPSED`;
       els.backToAdmin.classList.toggle("hidden", !isAdminView());
-      els.adminPhaseLine.textContent = `${game.phase.toUpperCase()} â€¢ Round ${game.round}${game.paused ? " â€¢ Paused" : ""}`;
+      els.adminPhaseLine.textContent = `${game.phase.toUpperCase()} - Round ${game.round}${game.paused ? " - Paused" : ""}`;
       const banks = recomputeBanks(snapshot.players, game);
       renderAdminBank("A", banks.A, els.adminBankA);
       renderAdminBank("B", banks.B, els.adminBankB);
@@ -1956,7 +1962,7 @@
         <h2>${bankNames[bank]}</h2>
         <div class="status-line">
           <span class="pill">${banker ? `Banker: ${banker.name}` : "No banker yet"}</span>
-          <span class="pill">${bankState.solvent ? "âœ… Solvent" : "âš ï¸ Missed payment"}</span>
+          <span class="pill">${bankState.solvent ? "Solvent" : "Missed payment"}</span>
         </div>
         <div class="grid two">
           <div class="metric ${className}"><span>Deposits</span><strong>${money(bankState.deposits)}</strong></div>
@@ -2003,7 +2009,7 @@
     function render() {
       const game = snapshot.game;
       if (!game) return;
-      els.roundPill.textContent = `Round ${game.round} â€¢ ${game.phase}`;
+      els.roundPill.textContent = `Round ${game.round} - ${game.phase}`;
       renderTimer();
 
       if (local.isAdmin || local.role === "admin") {
@@ -2028,7 +2034,7 @@
     }
 
     firebase.database().ref(".info/connected").on("value", snap => {
-      els.connectionPill.textContent = snap.val() ? "Connected âœ…" : "Connecting...";
+      els.connectionPill.textContent = snap.val() ? "Connected OK" : "Connecting...";
     });
 
     roomRef.on("value", snap => {
@@ -2072,4 +2078,5 @@
   </script>
 </body>
 </html>
+
 
