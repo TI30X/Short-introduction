@@ -187,11 +187,16 @@
     }
 
     .projector-timer.paused {
-      width: 150px;
+      width: min(300px, 30vw);
+      min-width: 220px;
+      height: 112px;
       border-radius: var(--radius);
+      border: 4px solid white;
       background: var(--amber);
       color: #241700;
-      font-size: 1.35rem;
+      font-size: 2.5rem;
+      box-shadow: 0 0 0 8px rgba(245, 166, 35, 0.32), 0 18px 44px rgba(0, 0, 0, 0.28);
+      animation: pulse 700ms ease infinite alternate;
     }
 
     .projector-tile {
@@ -212,13 +217,22 @@
 
     .disclaimer {
       margin-top: 14px;
-      padding: 14px;
+      padding: 12px 14px;
       border-radius: var(--radius);
-      border: 1px solid rgba(245, 166, 35, 0.42);
-      background: rgba(245, 166, 35, 0.14);
-      color: var(--ink);
-      font-size: 0.92rem;
-      font-weight: 760;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.06);
+      color: rgba(255, 255, 255, 0.74);
+      font-size: 0.82rem;
+      font-weight: 700;
+      line-height: 1.38;
+      box-shadow: none;
+    }
+
+    .disclaimer strong {
+      display: block;
+      margin-bottom: 4px;
+      color: rgba(255, 255, 255, 0.86);
+      font-size: 0.86rem;
     }
 
     .projector-disclaimer {
@@ -667,8 +681,11 @@
 
     .tvz-mark {
       min-width: 104px;
-      padding-right: 20px;
-      border-right: 1px solid rgba(255, 255, 255, 0.22);
+      align-self: stretch;
+      display: grid;
+      align-content: center;
+      padding-right: 26px;
+      border-right: 2px solid rgba(255, 255, 255, 0.26);
     }
 
     .tvz-logo {
@@ -923,7 +940,7 @@
 
       .tvz-mark {
         border-right: 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+        border-bottom: 2px solid rgba(255, 255, 255, 0.26);
         padding: 0 0 12px;
       }
     }
@@ -1083,7 +1100,8 @@
         <div class="work-title">A Very Short Introduction - Banking &amp; Finance</div>
         <div class="work-subtitle">Interactive classroom activity: Run Your Bank</div>
         <div class="work-subtitle">Prepared for the English presentation project - KSA</div>
-        <div class="disclaimer">Disclaimer: This game is simplified for explanation and time-restraint purposes. In reality, central banks, regulation, deposit insurance, interbank lending, and longer-term loan contracts would also shape how banks survive stress. The core idea remains: banks must balance profitability, liquidity, risk, and trust.</div>
+        <div class="work-subtitle">Made together with Alea Wildberger</div>
+        <div class="disclaimer"><strong>Important disclaimer</strong>This game is simplified for explanation and time-restraint purposes. In reality, central banks, regulation, deposit insurance, interbank lending, and longer-term loan contracts would also shape how banks survive stress. The core idea remains: banks must balance profitability, liquidity, risk, and trust.</div>
       </div>
     </footer>
   </div>
@@ -2312,7 +2330,7 @@
           : "Watch the current phase and use this screen for class discussion.";
       els.projectorTiles.innerHTML = explanationTiles(game).map(tile => `
         <div class="projector-tile"><strong>${tile[0]}</strong><p class="lead">${tile[1]}</p></div>
-      `).join("") + `<div class="projector-tile"><strong>Disclaimer</strong><p class="lead">This is a simplified model for explanation and time-restraint purposes. Real banking also involves central banks, regulation, deposit insurance, interbank lending, and long-term loan contracts.</p></div>`;
+      `).join("") + `<div class="projector-tile disclaimer"><strong>Important disclaimer</strong><p>This is a simplified model for explanation and time-restraint purposes. Real banking also involves central banks, regulation, deposit insurance, interbank lending, and long-term loan contracts.</p></div>`;
       els.projectorLeaderboardCard.classList.toggle("hidden", game.phase !== "leaderboard");
       if (game.phase === "leaderboard") {
         const rows = leaderboardRows(game);
