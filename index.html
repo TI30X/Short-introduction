@@ -1788,11 +1788,11 @@
           playerUpdates[`${player.id}/choiceMade`] = false;
           playerUpdates[`${player.id}/lastDecision`] = "";
           playerUpdates[`${player.id}/lastReport`] = canPay
-            ? `${bankNames[bank]} paid ${percent(paidRate)} interest this round.`
-            : `Warning: ${bankNames[bank]} could NOT pay the promised ${percent(banks[bank].rateOffer)}. It paid ${percent(paidRate)}.`;
+            ? `${bankNames[bank]} paid a ${percent(paidRate)} return this round.`
+            : `Warning: ${bankNames[bank]} could NOT pay the promised ${percent(banks[bank].rateOffer)} return. It paid ${percent(paidRate)}.`;
         });
 
-        summaries.push(`${bankNames[bank]} chose ${label}: ${returnRate >= 0 ? "+" : ""}${percent(returnRate)} return on ${money(customerInvestment)} customer-funded loans and ${money(ownCapitalInvestment)} own capital, paid ${percent(paidRate)} interest.`);
+        summaries.push(`${bankNames[bank]} chose ${label}: ${returnRate >= 0 ? "+" : ""}${percent(returnRate)} investment return on ${money(customerInvestment)} customer-funded loans and ${money(ownCapitalInvestment)} own capital, paid a ${percent(paidRate)} customer return.`);
 
         if (bank === "A" && game.round >= 4 && !canPay && bankCustomers("A").length <= 1) {
           collapsedBank = "A";
@@ -2023,7 +2023,7 @@
           </div>
           <div class="grid three">
             <div class="metric"><span>Your bank</span><strong>${bank ? bankNames[bank] : "Cash"}</strong></div>
-            <div class="metric bank-b"><span>Your interest</span><strong>${money(player.lastInterest || 0)}</strong></div>
+            <div class="metric bank-b"><span>Your return</span><strong>${money(player.lastInterest || 0)}</strong></div>
             <div class="metric"><span>Your balance</span><strong>${money((player.balance || 0) + (player.cash || 0))}</strong></div>
           </div>
         </div>
@@ -2135,9 +2135,9 @@
             <div class="metric"><span>Bank capital invested</span><strong>${money(result.ownCapitalInvestment || 0)}</strong></div>
             <div class="metric"><span>Customer-fund result</span><strong>${money(result.customerFundGain || 0)}</strong></div>
             <div class="metric"><span>Own-capital result</span><strong>${money(result.ownCapitalGain || 0)}</strong></div>
-            <div class="metric ${result.canPay === false ? "danger" : "bank-b"}"><span>Paid interest</span><strong>${percent(result.paidRate || 0)}</strong></div>
+            <div class="metric ${result.canPay === false ? "danger" : "bank-b"}"><span>Paid return</span><strong>${percent(result.paidRate || 0)}</strong></div>
             <div class="metric"><span>Repaid old debt</span><strong>${money(result.repaid || 0)}</strong></div>
-            <div class="metric danger"><span>New unpaid interest</span><strong>${money(result.unpaidInterest || 0)}</strong></div>
+            <div class="metric danger"><span>Unpaid return</span><strong>${money(result.unpaidInterest || 0)}</strong></div>
           </div>
         </article>
       `;
@@ -2224,7 +2224,7 @@
               <div class="metric"><span>Your bank</span><strong>${player.bank ? bankNames[player.bank] : "Cash"}</strong></div>
               <div class="metric"><span>Bank A trust</span><strong>${game.banks.A.trust}/100</strong></div>
               <div class="metric"><span>Bank B trust</span><strong>${game.banks.B.trust}/100</strong></div>
-              <div class="metric bank-b"><span>Interest earned</span><strong>${money(player.lastInterest)}</strong></div>
+              <div class="metric bank-b"><span>Return earned</span><strong>${money(player.lastInterest)}</strong></div>
               <div class="metric danger"><span>Still owed to you</span><strong>${money(player.owed || 0)}</strong></div>
             </div>
             <div class="grid three">
@@ -2254,7 +2254,7 @@
       return `
         <article class="bank-card ${className}">
           <h2>${bankNames[bank]}</h2>
-          <div class="metric ${className}"><span>Offered interest</span><strong>${percent(bankState.rateOffer)}</strong></div>
+          <div class="metric ${className}"><span>Offered yield</span><strong>${percent(bankState.rateOffer)}</strong></div>
           <div class="metric"><span>Trust level</span><strong>${bankState.trust}/100</strong></div>
           <p class="lead">Bankers may still adjust this rate. You can change your choice until deposits close.</p>
           <button class="button ${className} ${selected ? "selected" : ""}" data-bank-choice="${bank}">${selected ? "Selected" : "Choose"} ${bankNames[bank]}</button>
@@ -2274,16 +2274,16 @@
       const className = bank === "A" ? "bank-a" : "bank-b";
       els.playerRole.textContent = `Banker ${bank}`;
       els.playerTitle.textContent = `You are Banker ${bank}!`;
-      els.playerSubtitle.textContent = game.phase === "setup" ? "Set the interest rate offer customers will see." : `${bankNames[bank]} dashboard. Choose how to invest deposits this round.`;
+      els.playerSubtitle.textContent = game.phase === "setup" ? "Set the deposit yield customers will see." : `${bankNames[bank]} dashboard. Choose how to invest deposits this round.`;
 
       if (game.phase === "setup") {
         const minRate = bank === "A" ? 4 : 0;
         const maxRate = bank === "A" ? 12 : 5;
         els.playerContent.innerHTML = `
           <div class="card pad">
-            <label for="rateOffer">Interest rate offer</label>
+            <label for="rateOffer">Deposit yield offer</label>
             <input id="rateOffer" type="range" min="${minRate}" max="${maxRate}" step="0.5" value="${bankState.rateOffer * 100}" />
-            <div class="metric ${className}" style="margin-top: 14px;"><span>Customer offer</span><strong id="rateOfferLabel">${percent(bankState.rateOffer)}</strong></div>
+            <div class="metric ${className}" style="margin-top: 14px;"><span>Promised return</span><strong id="rateOfferLabel">${percent(bankState.rateOffer)}</strong></div>
             <div class="metric" style="margin-top: 14px;"><span>Starting capital insurance</span><strong>${money(bankState.capital ?? STARTING_CAPITAL)}</strong></div>
             <div class="notice" style="margin-top: 14px;">Range: ${minRate}% to ${maxRate}%. Customers will choose one bank when the presenter closes deposits.</div>
           </div>
@@ -2312,7 +2312,7 @@
               <div class="metric"><span>Capital / debt</span><strong>${money(bankState.capital || 0)}</strong></div>
               <div class="metric"><span>Withdrawn last round</span><strong>${money(bankState.lastWithdrawn || 0)}</strong></div>
               <div class="metric danger"><span>Owed to customers</span><strong>${money(bankState.owedToCustomers || 0)}</strong></div>
-              <div class="metric ${bankState.solvent ? "bank-b" : "danger"}"><span>Interest status</span><strong>${bankState.solvent ? "Could pay" : "Could not pay"}</strong></div>
+              <div class="metric ${bankState.solvent ? "bank-b" : "danger"}"><span>Return status</span><strong>${bankState.solvent ? "Could pay" : "Could not pay"}</strong></div>
             </div>
             <div class="card pad">
               <h3>Investment options</h3>
@@ -2341,10 +2341,10 @@
 
       if (game.phase === "decision") {
         const resultNotice = bankState.customers === 0
-          ? "No customers expected interest this round. This only changed your bank's own capital."
+          ? "No customers expected a return this round. This only changed your bank's own capital."
           : bankState.solvent
-            ? "✅ Your bank paid the promised interest."
-            : "⚠️ Your bank could not fully pay promised interest.";
+            ? "✅ Your bank paid the promised return."
+            : "⚠️ Your bank could not fully pay the promised return.";
         els.playerContent.innerHTML = `
           <div class="grid">
             <div class="notice ${bankState.customers === 0 || bankState.solvent ? "" : "danger"}">${resultNotice}</div>
@@ -2430,7 +2430,7 @@
         <div class="grid two">
           <div class="metric ${className}"><span>Deposits</span><strong>${money(bankState.deposits)}</strong></div>
           <div class="metric"><span>Customers</span><strong>${bankState.customers}</strong></div>
-          <div class="metric"><span>Offer</span><strong>${percent(bankState.rateOffer)}</strong></div>
+          <div class="metric"><span>Yield offer</span><strong>${percent(bankState.rateOffer)}</strong></div>
           <div class="metric"><span>Trust</span><strong>${bankState.trust}/100</strong></div>
           <div class="metric"><span>Capital</span><strong>${money(bankState.capital || 0)}</strong></div>
           <div class="metric danger"><span>Debt / owed</span><strong>${money(bankState.debt || 0)}</strong></div>
@@ -2494,7 +2494,7 @@
       if (game.phase === "setup") {
         return [
           ["Join", "Students enter their name and receive their role for the game."],
-          ["Deposit choice", "Customers compare interest offers and trust levels before choosing Bank A or Bank B."],
+          ["Deposit choice", "Customers compare deposit yields and trust levels before choosing Bank A or Bank B."],
           ["Model note", "The simulation is simplified for explanation and time limits. Real banking also includes central banks, regulation, deposit insurance, and interbank lending."]
         ];
       }
@@ -2502,7 +2502,7 @@
         return [
           ["Banker decision", "Each bank chooses one investment option. Higher upside usually means higher downside."],
           ["Customer money vs capital", "Banks invest loanable customer deposits and their own capital, but these are tracked separately."],
-          ["Risk", "A loss can reduce trust even if the bank still pays interest."]
+          ["Risk", "A loss can reduce trust even if the bank still pays the promised return."]
         ];
       }
       if (game.phase === "decision") {
