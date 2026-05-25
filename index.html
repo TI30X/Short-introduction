@@ -1529,6 +1529,7 @@
         paused: false,
         waitForAll: false,
         rumour: false,
+        rumourId: "",
         ended: false,
         collapsedBank: "",
         countdownEndsAt: 0,
@@ -2306,9 +2307,11 @@
           time: Date.now()
         }].slice(-12);
       }
+      const shouldWarn = game.rumour || (game.round >= 4 && !banks.A.solvent);
       await gameRef.update({
         phase: collapsedBank ? "ended" : "decision",
-        rumour: game.rumour || (game.round >= 4 && !banks.A.solvent),
+        rumour: shouldWarn,
+        rumourId: shouldWarn ? (game.rumourId || `warning-${Date.now()}`) : "",
         collapsedBank,
         ended: Boolean(collapsedBank),
         countdownEndsAt: collapsedBank ? 0 : countdownForMode(game),
@@ -2416,7 +2419,7 @@
     }
 
     async function triggerRumour() {
-      await gameRef.update({ rumour: true });
+      await gameRef.update({ rumour: true, rumourId: `warning-${Date.now()}` });
     }
 
     async function moveExplanationSlide(delta) {
@@ -2658,7 +2661,7 @@
     }
 
     function rumourKey(game) {
-      return `marketWarningAck:${local.id}`;
+      return `marketWarningAck:${local.id}:${game.rumourId || `legacy-${game.round || 1}`}`;
     }
 
     function hasAcknowledgedRumour(game) {
@@ -3367,7 +3370,7 @@
       if (failedByCapital) {
         endForCapitalCollapse(failedByCapital, game);
       }
-      document.body.classList.toggle("market-flash", Boolean(game.rumour && !hasAcknowledgedRumour(game) && !game.ended && game.phase !== "leaderboard"));
+      document.body.classList.toggle("market-flash", false);
       document.body.classList.toggle("end-flash", Boolean(game.ended && game.phase !== "leaderboard"));
       els.roundPill.textContent = `Round ${game.round} - ${game.phase}`;
       if (presenterMode) {
