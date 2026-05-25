@@ -1648,12 +1648,13 @@
       };
     }
 
-    function trustDelta(customers, returnRate, canPay) {
+    function trustDelta(customers, returnRate, canPay, promisedRate) {
       if (customers <= 0) return 0;
-      let delta = canPay ? 3 : -25;
-      if (returnRate < 0) delta += Math.max(-22, Math.round(returnRate * 45));
-      if (returnRate > 0.08) delta += 5;
-      return delta;
+      let delta = canPay ? 1 : -28;
+      if (returnRate < 0) delta += Math.max(-35, Math.round(returnRate * 120));
+      if (returnRate < promisedRate) delta -= Math.ceil((promisedRate - returnRate) * 80);
+      if (returnRate > promisedRate + 0.04) delta += 2;
+      return Math.max(-45, Math.min(6, delta));
     }
 
     function recomputeBanks(players = snapshot.players, game = snapshot.game) {
@@ -1844,6 +1845,7 @@
         const gain = investmentBase * returnRate;
         const customerFundGain = customerInvestment * returnRate;
         const ownCapitalGain = ownCapitalInvestment * returnRate;
+        const customerDepositLossCovered = Math.max(0, -customerFundGain);
         banks[bank].capital = Number(banks[bank].capital ?? STARTING_CAPITAL) + gain;
         const promised = banks[bank].deposits * banks[bank].rateOffer;
         const customersAtBank = Object.values(players).filter(player => player.role === "customer" && player.bank === bank);
@@ -1868,7 +1870,7 @@
         banks[bank].debt = Math.max(0, -banks[bank].capital) + banks[bank].owedToCustomers;
         banks[bank].lastWithdrawn = Math.max(0, Number(game.banks?.[bank]?.deposits || 0) - banks[bank].deposits);
         banks[bank].solvent = canPay;
-        banks[bank].trust = Math.max(0, Math.min(100, (banks[bank].trust || 100) + trustDelta(banks[bank].customers, returnRate, canPay)));
+        banks[bank].trust = Math.max(0, Math.min(100, (banks[bank].trust || 100) + trustDelta(banks[bank].customers, returnRate, canPay, banks[bank].rateOffer)));
         const label = findInvestment(bank, selected, banks[bank])?.name || "No investment";
         lastResults[bank] = {
           label,
@@ -1880,6 +1882,7 @@
           ownCapitalInvestment,
           customerFundGain,
           ownCapitalGain,
+          customerDepositLossCovered,
           promisedRate: banks[bank].rateOffer,
           paidRate,
           unpaidInterest,
@@ -1907,7 +1910,7 @@
             : `Warning: ${bankNames[bank]} could NOT pay the promised ${percent(banks[bank].rateOffer)} return. It paid ${percent(paidRate)}.`;
         });
 
-        summaries.push(`${bankNames[bank]} chose ${label}: ${returnRate >= 0 ? "+" : ""}${percent(returnRate)} investment return on ${money(customerInvestment)} customer-funded loans and ${money(ownCapitalInvestment)} own capital, paid a ${percent(paidRate)} customer return.`);
+        summaries.push(`${bankNames[bank]} chose ${label}: ${returnRate >= 0 ? "+" : ""}${percent(returnRate)} investment return on ${money(customerInvestment)} customer deposits and ${money(ownCapitalInvestment)} bank capital, paid a ${percent(paidRate)} customer return.`);
 
         if (bank === "A" && game.round >= 4 && !canPay && bankCustomers("A").length <= 1) {
           collapsedBank = "A";
@@ -2227,6 +2230,7 @@
             <div class="metric"><span>Bank capital invested</span><strong>${money(result.ownCapitalInvestment || 0)}</strong></div>
             <div class="metric"><span>Customer-fund result</span><strong>${money(result.customerFundGain || 0)}</strong></div>
             <div class="metric"><span>Own-capital result</span><strong>${money(result.ownCapitalGain || 0)}</strong></div>
+            <div class="metric danger"><span>Deposit loss covered by capital</span><strong>${money(result.customerDepositLossCovered || 0)}</strong></div>
             <div class="metric ${result.canPay === false ? "danger" : "bank-b"}"><span>Paid return</span><strong>${percent(result.paidRate || 0)}</strong></div>
             <div class="metric"><span>Repaid old debt</span><strong>${money(result.repaid || 0)}</strong></div>
             <div class="metric danger"><span>Unpaid return</span><strong>${money(result.unpaidInterest || 0)}</strong></div>
@@ -2405,7 +2409,7 @@
           <div class="grid">
             <div class="grid three">
               <div class="metric ${className}"><span>Total deposits</span><strong>${money(bankState.deposits)}</strong></div>
-              <div class="metric"><span>Customer loan funds to invest</span><strong>${money(Math.max(0, bankState.deposits * (1 - RESERVE_RATIO)))}</strong></div>
+              <div class="metric"><span>Customer deposits available</span><strong>${money(Math.max(0, bankState.deposits * (1 - RESERVE_RATIO)))}</strong></div>
               <div class="metric"><span>Own capital to invest</span><strong>${money(Math.max(0, bankState.capital || 0))}</strong></div>
               <div class="metric"><span>Customers</span><strong>${bankState.customers}</strong></div>
               <div class="metric"><span>Capital</span><strong>${money(bankState.capital || 0)}</strong></div>
@@ -2414,27 +2418,31 @@
               <div class="metric ${bankState.solvent ? "bank-b" : "danger"}"><span>Return status</span><strong>${bankState.solvent ? "Could pay" : "Could not pay"}</strong></div>
             </div>
             <div class="card pad">
-              <h3>Investment amount</h3>
+              <h3>Choose how much to invest</h3>
               <div class="notice ${isAllIn ? "warning" : ""}" style="margin-top: 12px;">
-                Choose how much money to put at risk this round. All in is not recommended because one bad result can damage capital, liquidity, and trust.
+                Keep these separate: customer deposits are money the bank must still repay; bank capital is the bank's own safety cushion. All in is not recommended.
               </div>
               <div class="grid two" style="margin-top: 12px;">
                 <div class="field">
-                  <label for="customerInvestAmount">Customer loan funds</label>
+                  <label for="customerInvestAmount">Customer deposits available for investment</label>
                   <input id="customerInvestAmount" type="number" min="0" max="${Math.round(amountChoice.capacity.customer)}" step="50" value="${Math.round(amountChoice.customer)}" />
-                  <small>Available: ${money(amountChoice.capacity.customer)}</small>
+                  <small>Available after reserves: ${money(amountChoice.capacity.customer)}. If this loses money, your capital must cover it.</small>
                 </div>
                 <div class="field">
-                  <label for="ownInvestAmount">Own bank capital</label>
+                  <label for="ownInvestAmount">Bank capital to invest</label>
                   <input id="ownInvestAmount" type="number" min="0" max="${Math.round(amountChoice.capacity.own)}" step="50" value="${Math.round(amountChoice.own)}" />
-                  <small>Available: ${money(amountChoice.capacity.own)}</small>
+                  <small>Available own capital: ${money(amountChoice.capacity.own)}. This is your insurance against losses and unpaid returns.</small>
                 </div>
               </div>
               <div class="grid two" style="margin-top: 12px;">
                 <button class="button" id="saveInvestmentAmount" type="button">Save amount</button>
                 <button class="button danger" id="allInInvestment" type="button">All in</button>
               </div>
-              <div class="metric ${isAllIn ? "danger" : className}" style="margin-top: 12px;"><span>Chosen total at risk</span><strong>${money(totalChosen)}</strong></div>
+              <div class="grid two" style="margin-top: 12px;">
+                <div class="metric"><span>Selected customer deposits</span><strong>${money(amountChoice.customer)}</strong></div>
+                <div class="metric ${isAllIn ? "danger" : className}"><span>Selected bank capital</span><strong>${money(amountChoice.own)}</strong></div>
+              </div>
+              <div class="metric ${isAllIn ? "danger" : className}" style="margin-top: 12px;"><span>Total at risk</span><strong>${money(totalChosen)}</strong></div>
             </div>
             <div class="card pad">
               <h3>Investment options</h3>
@@ -2491,6 +2499,7 @@
               <div class="metric"><span>Bank capital invested</span><strong>${money(game.lastResults?.[bank]?.ownCapitalInvestment || 0)}</strong></div>
               <div class="metric"><span>Customer-fund result</span><strong>${money(game.lastResults?.[bank]?.customerFundGain || 0)}</strong></div>
               <div class="metric"><span>Own-capital result</span><strong>${money(game.lastResults?.[bank]?.ownCapitalGain || 0)}</strong></div>
+              <div class="metric danger"><span>Deposit loss covered</span><strong>${money(game.lastResults?.[bank]?.customerDepositLossCovered || 0)}</strong></div>
               <div class="metric"><span>Capital</span><strong>${money(bankState.capital || 0)}</strong></div>
               <div class="metric"><span>Withdrawn</span><strong>${money(bankState.lastWithdrawn || 0)}</strong></div>
               <div class="metric danger"><span>Owed to customers</span><strong>${money(bankState.owedToCustomers || 0)}</strong></div>
