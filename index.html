@@ -1166,7 +1166,7 @@
                 <button class="button" id="skipTimer">Skip Timer</button>
                 <button class="button secondary" id="goBack">Go Back</button>
                 <button class="button bank-a" id="endRound">End Round</button>
-                <button class="button danger" id="triggerRumour">Trigger Rumour</button>
+                <button class="button danger" id="triggerRumour">Trigger Market Warning</button>
                 <button class="button danger" id="endGame">End Game</button>
                 <button class="button secondary" id="resetGame">Reset Game</button>
               </div>
@@ -1622,6 +1622,32 @@
       return options[Math.floor(Math.random() * options.length)] || investmentOptions[bank][0];
     }
 
+    function investmentCapacity(bankState) {
+      return {
+        customer: Math.max(0, Number(bankState.deposits || 0) * (1 - RESERVE_RATIO)),
+        own: Math.max(0, Number(bankState.capital || 0))
+      };
+    }
+
+    function defaultInvestmentAmount(max, share) {
+      return Math.round(Math.max(0, Number(max || 0)) * share);
+    }
+
+    function selectedInvestmentAmounts(bankState) {
+      const capacity = investmentCapacity(bankState);
+      const customer = bankState.selectedCustomerInvestment === undefined
+        ? defaultInvestmentAmount(capacity.customer, 0.7)
+        : Number(bankState.selectedCustomerInvestment || 0);
+      const own = bankState.selectedOwnCapitalInvestment === undefined
+        ? defaultInvestmentAmount(capacity.own, 0.5)
+        : Number(bankState.selectedOwnCapitalInvestment || 0);
+      return {
+        customer: Math.max(0, Math.min(capacity.customer, customer)),
+        own: Math.max(0, Math.min(capacity.own, own)),
+        capacity
+      };
+    }
+
     function trustDelta(customers, returnRate, canPay) {
       if (customers <= 0) return 0;
       let delta = canPay ? 3 : -25;
@@ -1674,22 +1700,32 @@
       const player = myPlayer();
       if (!player) return;
       const oldBank = player.bank || "";
+      let outflowBank = "";
+      let outflowAmount = 0;
       let updates = { choiceMade: true, updatedAt: firebase.database.ServerValue.TIMESTAMP };
       if (decision === "depositA" || decision === "depositB") {
         const nextBank = decision === "depositA" ? "A" : "B";
         const depositAmount = Number(player.balance || 0) + Number(player.cash || 0) || CUSTOMER_DEPOSIT;
+        if (oldBank && oldBank !== nextBank) {
+          outflowBank = oldBank;
+          outflowAmount = Number(player.balance || 0);
+        }
         updates.bank = nextBank;
         updates.cash = 0;
         updates.balance = depositAmount;
         updates.lastDecision = `Deposited at ${bankNames[nextBank]}`;
         updates.lastReport = `You joined ${bankNames[nextBank]} with ${money(depositAmount)}.`;
       } else if (decision === "holdCash") {
+        outflowBank = oldBank;
+        outflowAmount = Number(player.balance || 0);
         updates.bank = "";
         updates.cash = Number(player.cash || 0) + Number(player.balance || 0);
         updates.balance = 0;
         updates.lastDecision = "Kept cash";
         updates.lastReport = "You stayed out of both banks and kept your money as cash.";
       } else if (decision === "withdraw") {
+        outflowBank = oldBank;
+        outflowAmount = Number(player.balance || 0);
         updates.bank = "";
         updates.cash = Number(player.cash || 0) + Number(player.balance || 0);
         updates.balance = 0;
@@ -1697,6 +1733,8 @@
         updates.lastReport = "You withdrew all your money and kept it as cash.";
       } else if (decision === "switch") {
         const nextBank = player.bank === "A" ? "B" : "A";
+        outflowBank = oldBank;
+        outflowAmount = Number(player.balance || 0);
         updates.bank = nextBank;
         updates.lastDecision = `Switched to ${bankNames[nextBank]}`;
         updates.lastReport = `You switched to ${bankNames[nextBank]}.`;
@@ -1705,8 +1743,8 @@
         updates.lastReport = `You stayed with ${bankNames[player.bank]}.`;
       }
       await playersRef.child(local.id).update(updates);
-      if (decision === "withdraw" && oldBank) {
-        await checkImmediateCollapse(oldBank, Number(player.balance || 0));
+      if (outflowBank && outflowAmount > 0) {
+        await checkImmediateCollapse(outflowBank, outflowAmount);
       }
     }
 
@@ -1746,6 +1784,16 @@
       });
     }
 
+    async function updateInvestmentAmounts(bank, customerAmount, ownAmount) {
+      const bankState = snapshot.game?.banks?.[bank];
+      if (!bankState) return;
+      const capacity = investmentCapacity(bankState);
+      await gameRef.child(`banks/${bank}`).update({
+        selectedCustomerInvestment: Math.round(Math.max(0, Math.min(capacity.customer, Number(customerAmount || 0)))),
+        selectedOwnCapitalInvestment: Math.round(Math.max(0, Math.min(capacity.own, Number(ownAmount || 0))))
+      });
+    }
+
     async function closeDeposits() {
       const game = snapshot.game;
       await playersRef.once("value").then(async snap => {
@@ -1754,6 +1802,8 @@
         ["A", "B"].forEach(bank => {
           banks[bank].selectedInvestment = "";
           banks[bank].selectedLabel = "";
+          delete banks[bank].selectedCustomerInvestment;
+          delete banks[bank].selectedOwnCapitalInvestment;
           banks[bank].availableOptions = shuffledOptions(bank);
         });
         await gameRef.update({
@@ -1787,8 +1837,9 @@
         const autoOption = randomOption(bank, banks[bank]);
         const selected = banks[bank].selectedInvestment || autoOption.id;
         const returnRate = getInvestmentReturn(bank, selected, game.round, banks[bank]);
-        const customerInvestment = Math.max(0, banks[bank].deposits * (1 - RESERVE_RATIO));
-        const ownCapitalInvestment = Math.max(0, Number(banks[bank].capital ?? STARTING_CAPITAL));
+        const amountChoice = selectedInvestmentAmounts(banks[bank]);
+        const customerInvestment = amountChoice.customer;
+        const ownCapitalInvestment = amountChoice.own;
         const investmentBase = customerInvestment + ownCapitalInvestment;
         const gain = investmentBase * returnRate;
         const customerFundGain = customerInvestment * returnRate;
@@ -1809,6 +1860,8 @@
         banks[bank].lastReturn = gain;
         banks[bank].selectedInvestment = selected;
         banks[bank].selectedLabel = findInvestment(bank, selected, banks[bank])?.name || "Investment selected";
+        banks[bank].selectedCustomerInvestment = customerInvestment;
+        banks[bank].selectedOwnCapitalInvestment = ownCapitalInvestment;
         banks[bank].lastPaidRate = paidRate;
         banks[bank].lastRepaid = repayTotal;
         banks[bank].owedToCustomers = Math.max(0, oldOwed - repayTotal + unpaidInterest);
@@ -1925,6 +1978,8 @@
       ["A", "B"].forEach(bank => {
         banks[bank].selectedInvestment = "";
         banks[bank].selectedLabel = "";
+        delete banks[bank].selectedCustomerInvestment;
+        delete banks[bank].selectedOwnCapitalInvestment;
         banks[bank].availableOptions = shuffledOptions(bank);
       });
       await playersRef.update(resetChoices);
@@ -2088,8 +2143,10 @@
             <div class="metric bank-b"><span>Your return</span><strong>${money(player.lastInterest || 0)}</strong></div>
             <div class="metric"><span>Your balance</span><strong>${money((player.balance || 0) + (player.cash || 0))}</strong></div>
           </div>
+          ${rumourModal(player, game)}
         </div>
       `;
+      bindRumourButton(game);
     }
 
     function leaderboardRows(game) {
@@ -2179,17 +2236,18 @@
     }
 
     function rumourKey(game) {
-      return `rumourAck:${local.id}:${game.round}`;
+      return `marketWarningAck:${local.id}:${game.round}`;
     }
 
     function rumourModal(player, game) {
-      if (!game.rumour || player.bank !== "A" || storage.getItem(rumourKey(game)) === "yes") return "";
+      if (!game.rumour || storage.getItem(rumourKey(game)) === "yes") return "";
       return `
         <div class="rumour-modal" role="dialog" aria-modal="true" aria-labelledby="rumourTitle">
           <div class="rumour-box">
             <div class="warning-symbol">!</div>
-            <h2 id="rumourTitle">Bank A Rumour</h2>
-            <p class="lead">People are saying Bank A might collapse. Look carefully at your balance, trust level, and the money still owed before deciding.</p>
+            <h2 id="rumourTitle">Market warning</h2>
+            <p class="lead">Bank A is under visible stress. Check trust, returns, and any money still owed before deciding.</p>
+            <p class="lead">Bank A can still save itself if it regains enough capital and customers keep confidence.</p>
             <button class="button danger" id="ackRumour" type="button" style="width: 100%; margin-top: 16px;">OK, I understand</button>
           </div>
         </div>
@@ -2208,8 +2266,8 @@
     function renderCustomer(player, game) {
       els.playerRole.textContent = "Customer";
       els.playerTitle.textContent = "You are a Customer";
-      els.playerSubtitle.textContent = game.rumour && player.bank === "A"
-        ? "RUMOUR: People are saying Bank A might collapse..."
+      els.playerSubtitle.textContent = game.rumour
+        ? "Market warning: Bank A is under stress, but it can still recover."
         : `Hi, ${player.name}. Current bank: ${player.bank ? bankNames[player.bank] : "not deposited yet"}.`;
 
       if (game.phase === "setup") {
@@ -2240,14 +2298,14 @@
         const other = player.bank === "A" ? "B" : "A";
         const actionButtons = player.bank
           ? `
-              <button class="button bank-b ${player.lastDecision?.startsWith("Stayed") ? "selected" : ""}" data-decision="stay" ${player.choiceMade ? "disabled" : ""}>Stay</button>
-              <button class="button bank-a ${player.lastDecision?.startsWith("Switched") ? "selected" : ""}" data-decision="switch" ${player.choiceMade ? "disabled" : ""}>Switch to ${bankNames[other] || "a bank"}</button>
-              <button class="button danger ${player.lastDecision?.startsWith("Withdrew") ? "selected" : ""}" data-decision="withdraw" ${player.choiceMade ? "disabled" : ""}>Withdraw all</button>
+              <button class="button bank-b ${player.lastDecision?.startsWith("Stayed") ? "selected" : ""}" data-decision="stay">Stay</button>
+              <button class="button bank-a ${player.lastDecision?.startsWith("Switched") ? "selected" : ""}" data-decision="switch">Switch to ${bankNames[other] || "a bank"}</button>
+              <button class="button danger ${player.lastDecision?.startsWith("Withdrew") ? "selected" : ""}" data-decision="withdraw">Withdraw all</button>
             `
           : `
-              <button class="button bank-a ${player.lastDecision?.includes("Bank A") ? "selected" : ""}" data-decision="depositA" ${player.choiceMade ? "disabled" : ""}>Deposit at Bank A</button>
-              <button class="button bank-b ${player.lastDecision?.includes("Bank B") ? "selected" : ""}" data-decision="depositB" ${player.choiceMade ? "disabled" : ""}>Deposit at Bank B</button>
-              <button class="button secondary ${player.lastDecision?.startsWith("Kept") ? "selected" : ""}" data-decision="holdCash" ${player.choiceMade ? "disabled" : ""}>Keep cash</button>
+              <button class="button bank-a ${player.lastDecision?.includes("Bank A") ? "selected" : ""}" data-decision="depositA">Deposit at Bank A</button>
+              <button class="button bank-b ${player.lastDecision?.includes("Bank B") ? "selected" : ""}" data-decision="depositB">Deposit at Bank B</button>
+              <button class="button secondary ${player.lastDecision?.startsWith("Kept") ? "selected" : ""}" data-decision="holdCash">Keep cash</button>
             `;
         els.playerContent.innerHTML = `
           <div class="grid">
@@ -2322,7 +2380,9 @@
             <div class="metric" style="margin-top: 14px;"><span>Starting capital insurance</span><strong>${money(bankState.capital ?? STARTING_CAPITAL)}</strong></div>
             <div class="notice" style="margin-top: 14px;">Range: ${minRate}% to ${maxRate}%. Customers will choose one bank when the presenter closes deposits.</div>
           </div>
+          ${rumourModal(player, game)}
         `;
+        bindRumourButton(game);
         const rate = document.getElementById("rateOffer");
         const label = document.getElementById("rateOfferLabel");
         rate.addEventListener("input", () => label.textContent = `${Number(rate.value).toFixed(1).replace(".0", "")}%`);
@@ -2337,6 +2397,10 @@
 
       if (game.phase === "investment") {
         const options = bankOptions(bank, bankState);
+        const amountChoice = selectedInvestmentAmounts(bankState);
+        const totalChosen = amountChoice.customer + amountChoice.own;
+        const totalAvailable = amountChoice.capacity.customer + amountChoice.capacity.own;
+        const isAllIn = totalAvailable > 0 && totalChosen >= totalAvailable - 1;
         els.playerContent.innerHTML = `
           <div class="grid">
             <div class="grid three">
@@ -2344,10 +2408,33 @@
               <div class="metric"><span>Customer loan funds to invest</span><strong>${money(Math.max(0, bankState.deposits * (1 - RESERVE_RATIO)))}</strong></div>
               <div class="metric"><span>Own capital to invest</span><strong>${money(Math.max(0, bankState.capital || 0))}</strong></div>
               <div class="metric"><span>Customers</span><strong>${bankState.customers}</strong></div>
-              <div class="metric"><span>Capital / debt</span><strong>${money(bankState.capital || 0)}</strong></div>
+              <div class="metric"><span>Capital</span><strong>${money(bankState.capital || 0)}</strong></div>
               <div class="metric"><span>Withdrawn last round</span><strong>${money(bankState.lastWithdrawn || 0)}</strong></div>
               <div class="metric danger"><span>Owed to customers</span><strong>${money(bankState.owedToCustomers || 0)}</strong></div>
               <div class="metric ${bankState.solvent ? "bank-b" : "danger"}"><span>Return status</span><strong>${bankState.solvent ? "Could pay" : "Could not pay"}</strong></div>
+            </div>
+            <div class="card pad">
+              <h3>Investment amount</h3>
+              <div class="notice ${isAllIn ? "warning" : ""}" style="margin-top: 12px;">
+                Choose how much money to put at risk this round. All in is not recommended because one bad result can damage capital, liquidity, and trust.
+              </div>
+              <div class="grid two" style="margin-top: 12px;">
+                <div class="field">
+                  <label for="customerInvestAmount">Customer loan funds</label>
+                  <input id="customerInvestAmount" type="number" min="0" max="${Math.round(amountChoice.capacity.customer)}" step="50" value="${Math.round(amountChoice.customer)}" />
+                  <small>Available: ${money(amountChoice.capacity.customer)}</small>
+                </div>
+                <div class="field">
+                  <label for="ownInvestAmount">Own bank capital</label>
+                  <input id="ownInvestAmount" type="number" min="0" max="${Math.round(amountChoice.capacity.own)}" step="50" value="${Math.round(amountChoice.own)}" />
+                  <small>Available: ${money(amountChoice.capacity.own)}</small>
+                </div>
+              </div>
+              <div class="grid two" style="margin-top: 12px;">
+                <button class="button" id="saveInvestmentAmount" type="button">Save amount</button>
+                <button class="button danger" id="allInInvestment" type="button">All in</button>
+              </div>
+              <div class="metric ${isAllIn ? "danger" : className}" style="margin-top: 12px;"><span>Chosen total at risk</span><strong>${money(totalChosen)}</strong></div>
             </div>
             <div class="card pad">
               <h3>Investment options</h3>
@@ -2361,11 +2448,24 @@
                 `).join("")}
               </div>
             </div>
+            ${rumourModal(player, game)}
           </div>
         `;
+        const customerInput = document.getElementById("customerInvestAmount");
+        const ownInput = document.getElementById("ownInvestAmount");
+        const saveAmount = () => updateInvestmentAmounts(bank, customerInput.value, ownInput.value);
+        document.getElementById("saveInvestmentAmount").addEventListener("click", saveAmount);
+        customerInput.addEventListener("change", saveAmount);
+        ownInput.addEventListener("change", saveAmount);
+        document.getElementById("allInInvestment").addEventListener("click", () => {
+          customerInput.value = Math.round(amountChoice.capacity.customer);
+          ownInput.value = Math.round(amountChoice.capacity.own);
+          updateInvestmentAmounts(bank, customerInput.value, ownInput.value);
+        });
         document.querySelectorAll("[data-investment]").forEach(button => {
           button.addEventListener("click", () => bankerPick(bank, button.dataset.investment));
         });
+        bindRumourButton(game);
         return;
       }
 
@@ -2391,12 +2491,14 @@
               <div class="metric"><span>Bank capital invested</span><strong>${money(game.lastResults?.[bank]?.ownCapitalInvestment || 0)}</strong></div>
               <div class="metric"><span>Customer-fund result</span><strong>${money(game.lastResults?.[bank]?.customerFundGain || 0)}</strong></div>
               <div class="metric"><span>Own-capital result</span><strong>${money(game.lastResults?.[bank]?.ownCapitalGain || 0)}</strong></div>
-              <div class="metric"><span>Capital / debt</span><strong>${money(bankState.capital || 0)}</strong></div>
+              <div class="metric"><span>Capital</span><strong>${money(bankState.capital || 0)}</strong></div>
               <div class="metric"><span>Withdrawn</span><strong>${money(bankState.lastWithdrawn || 0)}</strong></div>
               <div class="metric danger"><span>Owed to customers</span><strong>${money(bankState.owedToCustomers || 0)}</strong></div>
             </div>
+            ${rumourModal(player, game)}
           </div>
         `;
+        bindRumourButton(game);
         return;
       }
 
@@ -2547,37 +2649,45 @@
     function explanationTiles(game) {
       if (game.phase === "setup") {
         return [
-          ["Join", "Students enter their name and receive their role for the game."],
-          ["Deposit choice", "Customers compare deposit yields and trust levels before choosing Bank A or Bank B."],
-          ["Model note", "The simulation is simplified for explanation and time limits. Real banking also includes central banks, regulation, deposit insurance, and interbank lending."]
+          ["Deposit choice", "Customers compare deposit yields and trust levels before choosing Bank A or Bank B."]
         ];
       }
       if (game.phase === "investment") {
         return [
-          ["Banker decision", "Each bank chooses one investment option. Higher upside usually means higher downside."],
-          ["Customer money vs capital", "Banks invest loanable customer deposits and their own capital, but these are tracked separately."],
-          ["Risk", "A loss can reduce trust even if the bank still pays the promised return."]
+          ["Investment", "Each bank chooses an option and how much money to put at risk. All in can be dangerous."]
         ];
       }
       if (game.phase === "decision") {
         return [
-          ["Stay", "Keep your money at the same bank if you still trust it."],
-          ["Switch", "Move your balance to the other bank for the next round."],
-          ["Withdraw", "Leave the banks and hold cash. Too many withdrawals can trigger a bank run."]
+          ["Customer decision", "Customers can stay, switch, or withdraw until the timer ends. A market warning means Bank A is under stress, but it can still recover."]
         ];
       }
       if (game.phase === "ended") {
         return [
-          ["Bank run", "A bank collapsed because withdrawals exceeded available cash."],
-          ["Fractional reserves", "Banks lend out part of deposits, so they cannot repay everyone at once."],
-          ["Next", "The final ranking will appear shortly."]
+          ["Bank run", "A bank collapsed because withdrawals exceeded available cash. The final ranking appears shortly."]
         ];
       }
       return [
-        ["Winner", "The participant with the most money wins."],
-        ["Customers", "Score includes balance, cash, and money still owed to them."],
-        ["Banks", "Score is bank capital minus debt."]
+        ["Winner", "Banks and customers are ranked separately. Scores include cash, balances, owed money, capital, and debt."]
       ];
+    }
+
+    function projectorBankTile(bank, bankState) {
+      const result = Number(bankState.lastReturn || 0);
+      const resultClass = result < 0 ? "danger" : "bank-b";
+      const investment = bankState.selectedLabel || "No investment yet";
+      return `
+        <div class="projector-tile">
+          <strong>${bankNames[bank]}</strong>
+          <div class="grid two">
+            <div class="metric"><span>Trust</span><strong>${bankState.trust ?? 100}/100</strong></div>
+            <div class="metric ${bank === "A" ? "bank-a" : "bank-b"}"><span>Yield offer</span><strong>${percent(bankState.rateOffer || 0)}</strong></div>
+            <div class="metric ${resultClass}"><span>Profit / loss</span><strong>${money(result)}</strong></div>
+            <div class="metric"><span>Paid return</span><strong>${percent(bankState.lastPaidRate || 0)}</strong></div>
+          </div>
+          <p class="lead" style="margin-top: 12px;">${investment}</p>
+        </div>
+      `;
     }
 
     function renderProjector(game) {
@@ -2592,8 +2702,14 @@
         ? "Student or bank with the most money wins."
         : game.paused
           ? "The game is paused by the presenter."
-          : "Watch the current phase and use this screen for class discussion.";
-      els.projectorTiles.innerHTML = explanationTiles(game).map(tile => `
+          : game.rumour
+            ? "Market warning: Bank A is under stress, but it can still save itself."
+            : "Watch the current phase and use this screen for class discussion.";
+      els.projectorTiles.innerHTML = `
+        ${game.rumour ? `<div class="projector-tile"><strong>Market warning</strong><p class="lead">Bank A is under visible stress. Watch trust, withdrawals, capital, and unpaid returns. Recovery is still possible.</p></div>` : ""}
+        ${projectorBankTile("A", game.banks.A)}
+        ${projectorBankTile("B", game.banks.B)}
+      ` + explanationTiles(game).map(tile => `
         <div class="projector-tile"><strong>${tile[0]}</strong><p class="lead">${tile[1]}</p></div>
       `).join("");
       els.projectorParticipants.innerHTML = participantRows();
