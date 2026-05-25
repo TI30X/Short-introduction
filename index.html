@@ -215,6 +215,19 @@
       font-size: 1.3rem;
     }
 
+    .projector-slide {
+      min-height: 260px;
+      border-top: 8px solid var(--blue);
+    }
+
+    .projector-slide h3 {
+      font-size: clamp(1.6rem, 4vw, 2.4rem);
+    }
+
+    .projector-slide p {
+      font-size: clamp(1.05rem, 2vw, 1.35rem);
+    }
+
     .projector-side {
       display: grid;
       grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.15fr);
@@ -758,6 +771,23 @@
       text-align: center;
     }
 
+    body.market-flash::before,
+    body.end-flash::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 45;
+      pointer-events: none;
+    }
+
+    body.market-flash::before {
+      animation: fullWarningFlash 1.25s ease-in-out infinite;
+    }
+
+    body.end-flash::before {
+      animation: fullDangerFlash 900ms ease-in-out infinite;
+    }
+
     .warning-symbol {
       display: grid;
       width: 82px;
@@ -793,6 +823,16 @@
     @keyframes flash {
       0%, 100% { box-shadow: var(--shadow); }
       45% { box-shadow: 0 0 0 9999px rgba(211, 47, 47, 0.18), var(--shadow); }
+    }
+
+    @keyframes fullWarningFlash {
+      0%, 100% { background: rgba(249, 168, 37, 0); }
+      45% { background: rgba(249, 168, 37, 0.18); }
+    }
+
+    @keyframes fullDangerFlash {
+      0%, 100% { background: rgba(211, 47, 47, 0); }
+      45% { background: rgba(211, 47, 47, 0.24); }
     }
 
     @keyframes shake {
@@ -1150,6 +1190,14 @@
               <div class="history" id="roundHistory" style="margin-top: 12px;"></div>
             </div>
             <div class="card pad">
+              <h3>So then what exactly happened?</h3>
+              <div id="adminExplanation" style="margin-top: 12px;"></div>
+              <div class="grid two" style="margin-top: 12px;">
+                <button class="button secondary" id="adminPrevSlide" type="button">Previous slide</button>
+                <button class="button" id="adminNextSlide" type="button">Next slide</button>
+              </div>
+            </div>
+            <div class="card pad">
               <h3>Final ranking</h3>
               <div class="history" id="adminLeaderboard" style="margin-top: 12px;"></div>
             </div>
@@ -1197,6 +1245,17 @@
             </div>
             <div class="projector-timer hidden" id="projectorTimer">20</div>
           </div>
+          <div class="card pad hidden" id="projectorLeaderboardCard">
+            <h3>Final ranking</h3>
+            <div class="history" id="projectorLeaderboard" style="margin-top: 12px;"></div>
+          </div>
+          <div class="card pad projector-slide" id="projectorExplanationCard">
+            <div id="projectorExplanation"></div>
+            <div class="grid two" style="margin-top: 16px;">
+              <button class="button secondary" id="projectorPrevSlide" type="button">Previous</button>
+              <button class="button" id="projectorNextSlide" type="button">Next</button>
+            </div>
+          </div>
           <div class="grid three" id="projectorTiles"></div>
           <div class="projector-side">
             <div class="card pad">
@@ -1208,10 +1267,6 @@
               <h3>Participants</h3>
               <div class="people-list" id="projectorParticipants" style="margin-top: 12px;"></div>
             </div>
-          </div>
-          <div class="card pad hidden" id="projectorLeaderboardCard">
-            <h3>Final ranking</h3>
-            <div class="history" id="projectorLeaderboard" style="margin-top: 12px;"></div>
           </div>
         </div>
       </section>
@@ -1319,6 +1374,9 @@
       barCashLabel: document.getElementById("barCashLabel"),
       roundHistory: document.getElementById("roundHistory"),
       adminLeaderboard: document.getElementById("adminLeaderboard"),
+      adminExplanation: document.getElementById("adminExplanation"),
+      adminPrevSlide: document.getElementById("adminPrevSlide"),
+      adminNextSlide: document.getElementById("adminNextSlide"),
       adminPlayers: document.getElementById("adminPlayers"),
       missingAnswers: document.getElementById("missingAnswers"),
       startRound: document.getElementById("startRound"),
@@ -1343,6 +1401,9 @@
     els.projectorParticipants = document.getElementById("projectorParticipants");
     els.projectorLeaderboardCard = document.getElementById("projectorLeaderboardCard");
     els.projectorLeaderboard = document.getElementById("projectorLeaderboard");
+    els.projectorExplanation = document.getElementById("projectorExplanation");
+    els.projectorPrevSlide = document.getElementById("projectorPrevSlide");
+    els.projectorNextSlide = document.getElementById("projectorNextSlide");
 
     const urlParams = new URLSearchParams(location.search);
     const presenterMode = urlParams.get("presenter") === "true" || urlParams.get("projector") === "true";
@@ -1423,6 +1484,7 @@
         },
         lastResults: {},
         previousGame: null,
+        explanationSlide: 0,
         history: []
       };
     }
@@ -1640,7 +1702,10 @@
       if (!game) return { answered: 0, total: 0, missing: [], label: "No answers needed" };
       if (game.phase === "investment") {
         const bankers = bankerPlayers();
-        const missing = bankers.filter(player => !game.banks?.[player.bank]?.selectedInvestment);
+        const missing = bankers.filter(player => {
+          const bankState = game.banks?.[player.bank];
+          return game.waitForAll ? !bankState?.confirmedInvestment : !bankState?.selectedInvestment;
+        });
         return {
           answered: bankers.length - missing.length,
           total: bankers.length,
@@ -1773,7 +1838,8 @@
       const oldBank = player.bank || "";
       let outflowBank = "";
       let outflowAmount = 0;
-      let updates = { choiceMade: true, updatedAt: firebase.database.ServerValue.TIMESTAMP };
+      const waitMode = Boolean(snapshot.game?.waitForAll);
+      let updates = { choiceMade: !waitMode, updatedAt: firebase.database.ServerValue.TIMESTAMP };
       if (decision === "depositA" || decision === "depositB") {
         const nextBank = decision === "depositA" ? "A" : "B";
         const depositAmount = Number(player.balance || 0) + Number(player.cash || 0) || CUSTOMER_DEPOSIT;
@@ -1819,6 +1885,16 @@
       }
     }
 
+    async function confirmCustomerChoice() {
+      const player = myPlayer();
+      if (!player) return;
+      await playersRef.child(local.id).update({
+        choiceMade: true,
+        lastDecision: player.lastDecision || (player.bank ? `Stayed with ${bankNames[player.bank]}` : "Kept cash"),
+        updatedAt: firebase.database.ServerValue.TIMESTAMP
+      });
+    }
+
     async function checkImmediateCollapse(bank, withdrawnAmount) {
       const game = snapshot.game;
       if (!game || game.phase !== "decision") return;
@@ -1851,7 +1927,14 @@
       const option = findInvestment(bank, optionId);
       await gameRef.child(`banks/${bank}`).update({
         selectedInvestment: optionId,
-        selectedLabel: option?.name || "Investment selected"
+        selectedLabel: option?.name || "Investment selected",
+        confirmedInvestment: snapshot.game?.waitForAll ? false : true
+      });
+    }
+
+    async function confirmBankerChoice(bank) {
+      await gameRef.child(`banks/${bank}`).update({
+        confirmedInvestment: true
       });
     }
 
@@ -1861,7 +1944,8 @@
       const capacity = investmentCapacity(bankState);
       await gameRef.child(`banks/${bank}`).update({
         selectedCustomerInvestment: Math.round(Math.max(0, Math.min(capacity.customer, Number(customerAmount || 0)))),
-        selectedOwnCapitalInvestment: Math.round(Math.max(0, Math.min(capacity.own, Number(ownAmount || 0))))
+        selectedOwnCapitalInvestment: Math.round(Math.max(0, Math.min(capacity.own, Number(ownAmount || 0)))),
+        confirmedInvestment: snapshot.game?.waitForAll ? false : Boolean(bankState.selectedInvestment)
       });
     }
 
@@ -1873,6 +1957,7 @@
         ["A", "B"].forEach(bank => {
           banks[bank].selectedInvestment = "";
           banks[bank].selectedLabel = "";
+          banks[bank].confirmedInvestment = false;
           delete banks[bank].selectedCustomerInvestment;
           delete banks[bank].selectedOwnCapitalInvestment;
           banks[bank].availableOptions = shuffledOptions(bank);
@@ -2058,6 +2143,7 @@
       ["A", "B"].forEach(bank => {
         banks[bank].selectedInvestment = "";
         banks[bank].selectedLabel = "";
+        banks[bank].confirmedInvestment = false;
         delete banks[bank].selectedCustomerInvestment;
         delete banks[bank].selectedOwnCapitalInvestment;
         banks[bank].availableOptions = shuffledOptions(bank);
@@ -2096,6 +2182,15 @@
 
     async function triggerRumour() {
       await gameRef.update({ rumour: true });
+    }
+
+    async function moveExplanationSlide(delta) {
+      const game = snapshot.game;
+      if (!game) return;
+      const slides = explanationSlides(game);
+      const current = Number(game.explanationSlide || 0);
+      const next = Math.max(0, Math.min(slides.length - 1, current + delta));
+      await gameRef.update({ explanationSlide: next });
     }
 
     async function endGame() {
@@ -2412,12 +2507,18 @@
             <div class="grid three">
               ${actionButtons}
             </div>
+            ${game.waitForAll ? `
+              <button class="button ${player.choiceMade ? "bank-b selected" : ""}" id="confirmCustomerChoice" type="button" style="width: 100%; margin-top: 10px;">
+                ${player.choiceMade ? "Confirmed" : "Confirm choice"}
+              </button>
+            ` : ""}
           </div>
           ${rumourModal(player, game)}
         `;
         document.querySelectorAll("[data-decision]").forEach(button => {
           button.addEventListener("click", () => customerDecision(button.dataset.decision));
         });
+        document.getElementById("confirmCustomerChoice")?.addEventListener("click", confirmCustomerChoice);
         bindRumourButton(game);
         return;
       }
@@ -2541,6 +2642,11 @@
                 `).join("")}
               </div>
             </div>
+            ${game.waitForAll ? `
+              <button class="button ${bankState.confirmedInvestment ? "bank-b selected" : ""}" id="confirmBankerChoice" type="button" style="width: 100%;">
+                ${bankState.confirmedInvestment ? "Confirmed" : "Confirm investment"}
+              </button>
+            ` : ""}
             ${rumourModal(player, game)}
           </div>
         `;
@@ -2562,6 +2668,7 @@
         document.querySelectorAll("[data-investment]").forEach(button => {
           button.addEventListener("click", () => bankerPick(bank, button.dataset.investment));
         });
+        document.getElementById("confirmBankerChoice")?.addEventListener("click", () => confirmBankerChoice(bank));
         bindRumourButton(game);
         return;
       }
@@ -2652,6 +2759,7 @@
       renderMissingAnswers(game);
       renderPlayers();
       renderHistory(game.history || []);
+      renderExplanation(els.adminExplanation, game, true);
       renderAdminLeaderboard(game);
     }
 
@@ -2744,6 +2852,82 @@
       `).join("") || `<div class="notice">No rounds completed yet.</div>`;
     }
 
+    function bankExplanationLine(bank, game) {
+      const bankState = game.banks?.[bank] || {};
+      const result = game.lastResults?.[bank] || {};
+      if (!result.label) {
+        return `${bankNames[bank]} has not completed an investment result yet.`;
+      }
+      const paidText = Number(result.customers || 0) <= 0
+        ? "No customers expected a return from this bank."
+        : result.canPay
+          ? `It paid the promised ${percent(result.promisedRate || bankState.rateOffer || 0)} return.`
+          : `It could not fully pay the promised ${percent(result.promisedRate || bankState.rateOffer || 0)} return and paid ${percent(result.paidRate || 0)}.`;
+      return `${bankNames[bank]} invested ${money(result.customerInvestment || 0)} of customer deposits and ${money(result.ownCapitalInvestment || 0)} of bank capital. The investment result was ${result.returnRate >= 0 ? "+" : ""}${percent(result.returnRate || 0)}, creating ${money(result.gain || 0)} profit/loss. ${paidText} Trust is now ${bankState.trust ?? 100}/100.`;
+    }
+
+    function explanationSlides(game) {
+      const banks = recomputeBanks(snapshot.players, game);
+      const customers = customerPlayers();
+      const cash = withdrawnCustomers().reduce((sum, player) => sum + Number(player.cash || 0), 0);
+      const slides = [
+        {
+          title: "1. Deposits created the banks",
+          body: `${customers.length} customers are in the game. Bank A holds ${money(banks.A.deposits)} in customer deposits and Bank B holds ${money(banks.B.deposits)}. ${money(cash)} is being held as cash outside the banks.`
+        },
+        {
+          title: "2. Banks invested two different pots",
+          body: "Customer deposits are money the bank must still repay. Bank capital is the bank's own safety cushion. Losses on customer-funded investments have to be absorbed by bank capital before customers can be fully protected."
+        },
+        {
+          title: "3. Bank A result",
+          body: bankExplanationLine("A", game)
+        },
+        {
+          title: "4. Bank B result",
+          body: bankExplanationLine("B", game)
+        },
+        {
+          title: "5. What customers saw",
+          body: `Customers compared paid returns and trust. Bank A trust is ${game.banks?.A?.trust ?? 100}/100, Bank B trust is ${game.banks?.B?.trust ?? 100}/100. If a bank missed payments or made visible losses, customers had a reason to switch or withdraw.`
+        }
+      ];
+      if (game.rumour) {
+        slides.push({
+          title: "6. Market warning",
+          body: "The warning means Bank A is visibly under stress. It is not automatically dead: it can still survive if enough customers stay and future results rebuild capital and trust."
+        });
+      }
+      if (game.collapsedBank) {
+        slides.push({
+          title: "7. Collapse",
+          body: `${bankNames[game.collapsedBank]} collapsed because withdrawal pressure and unpaid obligations exceeded the cash/capital it could use. This shows why liquidity and trust matter, not only profit.`
+        });
+      }
+      if (game.phase === "leaderboard") {
+        const topCustomer = customerLeaderboardRows()[0];
+        const topBank = bankLeaderboardRows(game)[0];
+        slides.push({
+          title: "Final ranking",
+          body: `Top customer: ${topCustomer ? `${topCustomer.name} with ${money(topCustomer.score)}` : "none yet"}. Top bank: ${topBank ? `${topBank.name} with ${money(topBank.score)}` : "none yet"}. Banks and customers are ranked separately.`
+        });
+      }
+      return slides;
+    }
+
+    function renderExplanation(container, game, compact = false) {
+      const slides = explanationSlides(game);
+      const index = Math.max(0, Math.min(slides.length - 1, Number(game.explanationSlide || 0)));
+      const slide = slides[index];
+      container.innerHTML = `
+        <div class="notice">
+          <strong>${slide.title}</strong>
+          <p class="lead" style="margin-top: 8px;">${slide.body}</p>
+          <small>Slide ${index + 1}/${slides.length}${compact ? " - click Next on the presenter screen" : ""}</small>
+        </div>
+      `;
+    }
+
     function renderAdminLeaderboard(game) {
       els.adminLeaderboard.innerHTML = groupedLeaderboardHtml(game, false);
     }
@@ -2834,6 +3018,7 @@
       ` + explanationTiles(game).map(tile => `
         <div class="projector-tile"><strong>${tile[0]}</strong><p class="lead">${tile[1]}</p></div>
       `).join("");
+      renderExplanation(els.projectorExplanation, game);
       els.projectorParticipants.innerHTML = participantRows();
       els.projectorLeaderboardCard.classList.toggle("hidden", game.phase !== "leaderboard");
       if (game.phase === "leaderboard") {
@@ -2844,6 +3029,8 @@
     function render() {
       const game = snapshot.game;
       if (!game) return;
+      document.body.classList.toggle("market-flash", Boolean(game.rumour && !game.ended && game.phase !== "leaderboard"));
+      document.body.classList.toggle("end-flash", Boolean(game.ended && game.phase !== "leaderboard"));
       els.roundPill.textContent = `Round ${game.round} - ${game.phase}`;
       if (presenterMode) {
         renderProjector(game);
@@ -2916,6 +3103,10 @@
     els.resumeGame.addEventListener("click", () => setPaused(false));
     els.timedMode.addEventListener("click", () => setAnswerMode(false));
     els.confirmMode.addEventListener("click", () => setAnswerMode(true));
+    els.adminPrevSlide.addEventListener("click", () => moveExplanationSlide(-1));
+    els.adminNextSlide.addEventListener("click", () => moveExplanationSlide(1));
+    els.projectorPrevSlide.addEventListener("click", () => moveExplanationSlide(-1));
+    els.projectorNextSlide.addEventListener("click", () => moveExplanationSlide(1));
     els.skipTimer.addEventListener("click", skipTimerNow);
     els.goBack.addEventListener("click", goBackPhase);
     els.endRound.addEventListener("click", endRound);
