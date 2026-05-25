@@ -1372,6 +1372,30 @@
       return (els.playerName.value || "Student").trim().slice(0, 28);
     }
 
+    function normalizedNameForCheck(name) {
+      return String(name || "")
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]/g, "")
+        .replace(/1/g, "i")
+        .replace(/!/g, "i")
+        .replace(/3/g, "e")
+        .replace(/4/g, "a")
+        .replace(/5/g, "s")
+        .replace(/0/g, "o");
+    }
+
+    function isAllowedName(name) {
+      const compact = normalizedNameForCheck(name);
+      const blocked = [
+        "niga",
+        "nigga",
+        "nigger"
+      ];
+      return !blocked.some(word => compact.includes(word));
+    }
+
     function gameDefaults() {
       return {
         phase: "setup",
@@ -1425,11 +1449,11 @@
       return Object.values(snapshot.players || {}).some(player => player.role === "banker" && player.bank === bank && player.id !== local.id);
     }
 
-    function nextAutoRole(players) {
-      const joined = Object.values(players || {}).filter(player => player.role !== "admin").sort((a, b) => {
+    function nextAutoRole(players, playerId = local.id) {
+      const joined = Object.values(players || {}).filter(player => ["banker", "customer"].includes(player.role)).sort((a, b) => {
         return Number(a.joinedOrder || a.connectedAt || 0) - Number(b.joinedOrder || b.connectedAt || 0);
       });
-      const existing = players?.[local.id];
+      const existing = players?.[playerId];
       if (existing?.role === "banker" || existing?.role === "customer") {
         return { role: existing.role, bank: existing.bank || "" };
       }
@@ -1454,6 +1478,10 @@
         showNotice("Please enter your name first.");
         return;
       }
+      if (!isAllowedName(name)) {
+        showNotice("Please choose a classroom-appropriate name.");
+        return;
+      }
       els.joinGame.disabled = true;
       els.joinGame.textContent = "Joining...";
       let result;
@@ -1461,19 +1489,20 @@
         result = await playersRef.transaction(players => {
           players = players || {};
           const now = Date.now();
-          const assignment = nextAutoRole(players);
           players[local.id] = {
             ...(players[local.id] || {}),
             id: local.id,
             name,
-            role: assignment.role,
-            bank: assignment.bank,
-            balance: assignment.role === "customer" ? Number(players[local.id]?.balance || CUSTOMER_DEPOSIT) : 0,
-            cash: assignment.role === "customer" ? Number(players[local.id]?.cash || 0) : 0,
+            role: "pending",
+            bank: "",
+            approved: false,
+            declined: false,
+            balance: 0,
+            cash: 0,
             owed: Number(players[local.id]?.owed || 0),
             choiceMade: false,
             lastInterest: Number(players[local.id]?.lastInterest || 0),
-            lastReport: assignmentMessage(assignment.role, assignment.bank),
+            lastReport: "Waiting for admin approval.",
             joinedOrder: players[local.id]?.joinedOrder || now,
             connectedAt: players[local.id]?.connectedAt || now,
             updatedAt: now
@@ -1493,7 +1522,7 @@
         return;
       }
       const assigned = result.snapshot.val()?.[local.id];
-      const role = assigned?.role || "customer";
+      const role = assigned?.role || "pending";
       const bank = assigned?.bank || "";
       local.role = role;
       local.bank = bank;
@@ -1504,10 +1533,43 @@
       const myPresence = presenceRef.child(local.id);
       await myPresence.set(true);
       myPresence.onDisconnect().set(false);
-      showNotice(assignmentMessage(role, bank));
+      showNotice("Joined. Waiting for admin approval.");
       els.joinGame.disabled = false;
       els.joinGame.textContent = "Join Game";
       render();
+    }
+
+    async function approvePlayer(playerId) {
+      await playersRef.transaction(players => {
+        players = players || {};
+        const player = players[playerId];
+        if (!player || !["pending", "declined"].includes(player.role)) return players;
+        const assignment = nextAutoRole(players, playerId);
+        players[playerId] = {
+          ...player,
+          role: assignment.role,
+          bank: assignment.bank,
+          approved: true,
+          declined: false,
+          balance: assignment.role === "customer" ? Number(player.balance || CUSTOMER_DEPOSIT) : 0,
+          cash: assignment.role === "customer" ? Number(player.cash || 0) : 0,
+          choiceMade: false,
+          lastReport: assignmentMessage(assignment.role, assignment.bank),
+          updatedAt: Date.now()
+        };
+        return players;
+      });
+    }
+
+    async function declinePlayer(playerId) {
+      await playersRef.child(playerId).update({
+        role: "declined",
+        bank: "",
+        approved: false,
+        declined: true,
+        lastReport: "Join request declined.",
+        updatedAt: firebase.database.ServerValue.TIMESTAMP
+      });
     }
 
     function enterAdmin() {
@@ -2031,16 +2093,22 @@
     }
 
     function leaderboardRows(game) {
+      return [...customerLeaderboardRows(), ...bankLeaderboardRows(game)].sort((a, b) => b.score - a.score);
+    }
+
+    function customerLeaderboardRows() {
+      return Object.values(snapshot.players || {})
+        .filter(player => player.role === "customer")
+        .map(player => ({
+          name: player.name,
+          role: player.bank ? `Customer - ${bankNames[player.bank]}` : "Customer - cash",
+          score: Number(player.balance || 0) + Number(player.cash || 0) + Number(player.owed || 0)
+        }))
+        .sort((a, b) => b.score - a.score);
+    }
+
+    function bankLeaderboardRows(game) {
       const rows = [];
-      Object.values(snapshot.players || {}).forEach(player => {
-        if (player.role === "customer") {
-          rows.push({
-            name: player.name,
-            role: "Customer",
-            score: Number(player.balance || 0) + Number(player.cash || 0) + Number(player.owed || 0)
-          });
-        }
-      });
       ["A", "B"].forEach(bank => {
         const banker = bankerFor(bank);
         const bankState = game.banks?.[bank] || {};
@@ -2053,37 +2121,6 @@
       return rows.sort((a, b) => b.score - a.score);
     }
 
-    function bankLeaderboardRows(game, bank) {
-      const bankState = game.banks?.[bank] || {};
-      const banker = bankerFor(bank);
-      const rows = [{
-        name: banker ? banker.name : bankNames[bank],
-        role: bankNames[bank],
-        score: Number(bankState.capital || 0) - Number(bankState.debt || 0)
-      }];
-      Object.values(snapshot.players || {}).forEach(player => {
-        if (player.role === "customer" && player.bank === bank) {
-          rows.push({
-            name: player.name,
-            role: "Customer",
-            score: Number(player.balance || 0) + Number(player.cash || 0) + Number(player.owed || 0)
-          });
-        }
-      });
-      return rows.sort((a, b) => b.score - a.score);
-    }
-
-    function cashLeaderboardRows() {
-      return Object.values(snapshot.players || {})
-        .filter(player => player.role === "customer" && !player.bank)
-        .map(player => ({
-          name: player.name,
-          role: "Cash / no bank",
-          score: Number(player.balance || 0) + Number(player.cash || 0) + Number(player.owed || 0)
-        }))
-        .sort((a, b) => b.score - a.score);
-    }
-
     function rankingRowsHtml(rows) {
       return rows.map((row, index) => `
         <div class="person">
@@ -2094,16 +2131,14 @@
     }
 
     function groupedLeaderboardHtml(game, useCards = true) {
-      const cashRows = cashLeaderboardRows();
       const block = (title, rows) => useCards
         ? `<div class="card pad"><h3>${title}</h3><div class="history" style="margin-top: 12px;">${rankingRowsHtml(rows)}</div></div>`
         : `<div><h3>${title}</h3><div class="history" style="margin-top: 12px;">${rankingRowsHtml(rows)}</div></div>`;
       return `
         <div class="grid two">
-          ${block("Bank A ranking", bankLeaderboardRows(game, "A"))}
-          ${block("Bank B ranking", bankLeaderboardRows(game, "B"))}
+          ${block("Bank ranking", bankLeaderboardRows(game))}
+          ${block("Customer ranking", customerLeaderboardRows())}
         </div>
-        ${cashRows.length ? block("Cash / withdrawn", cashRows) : ""}
       `;
     }
 
@@ -2453,6 +2488,25 @@
       const players = Object.values(snapshot.players || {}).sort((a, b) => (a.role + a.name).localeCompare(b.role + b.name));
       els.adminPlayers.innerHTML = players.map(player => {
         const online = snapshot.presence?.[player.id] ? "Online" : "Offline";
+        if (player.role === "pending") {
+          return `
+            <div class="person">
+              <div>${online} ${player.name}<small>Pending approval</small></div>
+              <div class="status-line">
+                <button class="button bank-b" data-approve-player="${player.id}" style="min-height: 38px; padding: 8px 10px;">Approve</button>
+                <button class="button danger" data-decline-player="${player.id}" style="min-height: 38px; padding: 8px 10px;">Decline</button>
+              </div>
+            </div>
+          `;
+        }
+        if (player.role === "declined") {
+          return `
+            <div class="person">
+              <div>${online} ${player.name}<small>Declined</small></div>
+              <button class="button secondary" data-approve-player="${player.id}" style="min-height: 38px; padding: 8px 10px;">Approve now</button>
+            </div>
+          `;
+        }
         const where = player.role === "customer" ? (player.bank ? bankNames[player.bank] : "Cash") : (player.bank ? bankNames[player.bank] : player.role);
         return `
           <div class="person">
@@ -2576,6 +2630,25 @@
         return;
       }
       setScreen(els.playerScreen);
+      if (player.role === "pending") {
+        els.playerRole.textContent = "Waiting";
+        els.playerTitle.textContent = "Waiting for approval";
+        els.playerSubtitle.textContent = "The admin will approve players before they enter the game.";
+        renderWaiting("Your join request has been sent. Please wait for the admin to approve it.");
+        return;
+      }
+      if (player.role === "declined") {
+        els.playerRole.textContent = "Not approved";
+        els.playerTitle.textContent = "Please check with the admin";
+        els.playerSubtitle.textContent = "Your join request was declined.";
+        els.playerContent.innerHTML = `
+          <div class="card pad">
+            <div class="notice warning">Your current join request was not approved. Ask the admin, then enter a different name if needed and join again.</div>
+            <button class="button" data-show-join="true" style="width: 100%; margin-top: 14px;">Back to join screen</button>
+          </div>
+        `;
+        return;
+      }
       if (player.role === "banker") renderBanker(player, game);
       else renderCustomer(player, game);
     }
@@ -2611,6 +2684,18 @@
     els.resetGame.addEventListener("click", resetGame);
     els.backToAdmin.addEventListener("click", () => {
       if (isAdminView()) setScreen(els.adminScreen);
+    });
+    document.addEventListener("click", event => {
+      const approve = event.target.closest("[data-approve-player]");
+      const decline = event.target.closest("[data-decline-player]");
+      const showJoin = event.target.closest("[data-show-join]");
+      if (approve) {
+        approvePlayer(approve.dataset.approvePlayer);
+      } else if (decline) {
+        declinePlayer(decline.dataset.declinePlayer);
+      } else if (showJoin) {
+        setScreen(els.joinScreen);
+      }
     });
 
     ensureGame();
