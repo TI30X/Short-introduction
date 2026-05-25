@@ -228,6 +228,51 @@
       font-size: clamp(1.05rem, 2vw, 1.35rem);
     }
 
+    .story-chart {
+      display: grid;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .story-row {
+      display: grid;
+      grid-template-columns: minmax(110px, 0.7fr) minmax(0, 1.5fr) auto;
+      gap: 10px;
+      align-items: center;
+      font-weight: 800;
+      color: var(--muted);
+    }
+
+    .story-track {
+      position: relative;
+      height: 18px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #E3E8EC;
+    }
+
+    .story-fill {
+      height: 100%;
+      border-radius: inherit;
+      min-width: 3px;
+    }
+
+    .story-fill.good {
+      background: var(--green);
+    }
+
+    .story-fill.bad {
+      background: var(--red);
+    }
+
+    .story-list {
+      margin: 12px 0 0;
+      padding-left: 22px;
+      color: var(--text);
+      font-weight: 800;
+      line-height: 1.55;
+    }
+
     .projector-side {
       display: grid;
       grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.15fr);
@@ -2082,6 +2127,7 @@
       const history = [...(game.history || []), {
         round: game.round,
         text: paySummary,
+        results: lastResults,
         time: Date.now()
       }].slice(-12);
 
@@ -2866,42 +2912,118 @@
       return `${bankNames[bank]} invested ${money(result.customerInvestment || 0)} of customer deposits and ${money(result.ownCapitalInvestment || 0)} of bank capital. The investment result was ${result.returnRate >= 0 ? "+" : ""}${percent(result.returnRate || 0)}, creating ${money(result.gain || 0)} profit/loss. ${paidText} Trust is now ${bankState.trust ?? 100}/100.`;
     }
 
+    function bankRoundResults(bank, game) {
+      const historyResults = (game.history || [])
+        .map(item => item.results?.[bank] ? { round: item.round, ...item.results[bank] } : null)
+        .filter(Boolean);
+      const current = game.lastResults?.[bank]?.label ? [{ round: game.round, ...game.lastResults[bank] }] : [];
+      const combined = [...historyResults, ...current];
+      const seen = new Set();
+      return combined.filter(item => {
+        const key = `${item.round}:${item.label}:${item.gain}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    function storyBar(label, value, max) {
+      const amount = Number(value || 0);
+      const width = Math.max(4, Math.min(100, Math.abs(amount) / Math.max(max, 1) * 100));
+      return `
+        <div class="story-row">
+          <span>${label}</span>
+          <div class="story-track"><div class="story-fill ${amount < 0 ? "bad" : "good"}" style="width:${width}%"></div></div>
+          <strong>${money(amount)}</strong>
+        </div>
+      `;
+    }
+
+    function bankStoryHtml(bank, game) {
+      const rounds = bankRoundResults(bank, game);
+      const bankState = game.banks?.[bank] || {};
+      if (!rounds.length) {
+        return `<p class="lead">${bankNames[bank]} has not finished an investment round yet.</p>`;
+      }
+      const total = rounds.reduce((sum, round) => sum + Number(round.gain || 0), 0);
+      const unpaid = Number(bankState.owedToCustomers || 0);
+      const max = Math.max(...rounds.map(round => Math.abs(Number(round.gain || 0))), Math.abs(total), unpaid, 1);
+      const list = rounds.map(round => `
+        <li>Round ${round.round}: ${round.label} (${round.returnRate >= 0 ? "+" : ""}${percent(round.returnRate || 0)}) = ${money(round.gain || 0)}</li>
+      `).join("");
+      const canPayText = bankState.solvent
+        ? `${bankNames[bank]} could still pay its customers this round.`
+        : `${bankNames[bank]} could not fully pay customers.`;
+      return `
+        <ol class="story-list">${list}</ol>
+        <div class="story-chart">
+          ${rounds.map(round => storyBar(`Round ${round.round}`, round.gain || 0, max)).join("")}
+          ${storyBar("Total result", total, max)}
+          ${storyBar("Still owed", -unpaid, max)}
+        </div>
+        <p class="lead" style="margin-top: 14px;">${canPayText} Trust is now ${bankState.trust ?? 100}/100.</p>
+      `;
+    }
+
+    function collapseStoryHtml(game) {
+      const bank = game.collapsedBank || "A";
+      const rounds = bankRoundResults(bank, game);
+      const totalLoss = rounds.reduce((sum, round) => sum + Math.min(0, Number(round.gain || 0)), 0);
+      const bankState = game.banks?.[bank] || {};
+      return `
+        <p class="lead">${bankNames[bank]} collapsed because losses and withdrawals became too much at the same time.</p>
+        <div class="story-chart">
+          ${storyBar("Investment losses", totalLoss, Math.max(Math.abs(totalLoss), Number(bankState.owedToCustomers || 0), Math.abs(Number(bankState.capital || 0)), 1))}
+          ${storyBar("Still owed", -Number(bankState.owedToCustomers || 0), Math.max(Math.abs(totalLoss), Number(bankState.owedToCustomers || 0), 1))}
+          ${storyBar("Capital left", Number(bankState.capital || 0), Math.max(Math.abs(totalLoss), Math.abs(Number(bankState.capital || 0)), 1))}
+        </div>
+        <p class="lead" style="margin-top: 14px;">In simple words: it could not repay customers fast enough, so trust broke and the bank lost.</p>
+      `;
+    }
+
     function explanationSlides(game) {
       const banks = recomputeBanks(snapshot.players, game);
       const customers = customerPlayers();
       const cash = withdrawnCustomers().reduce((sum, player) => sum + Number(player.cash || 0), 0);
       const slides = [
         {
-          title: "1. Deposits created the banks",
-          body: `${customers.length} customers are in the game. Bank A holds ${money(banks.A.deposits)} in customer deposits and Bank B holds ${money(banks.B.deposits)}. ${money(cash)} is being held as cash outside the banks.`
+          title: "Where did the money go?",
+          bodyHtml: `
+            <p class="lead">${customers.length} customers joined. Their deposits moved between Bank A, Bank B, and cash.</p>
+            <div class="story-chart">
+              ${storyBar("Bank A deposits", banks.A.deposits, Math.max(banks.A.deposits, banks.B.deposits, cash, 1))}
+              ${storyBar("Bank B deposits", banks.B.deposits, Math.max(banks.A.deposits, banks.B.deposits, cash, 1))}
+              ${storyBar("Cash outside banks", cash, Math.max(banks.A.deposits, banks.B.deposits, cash, 1))}
+            </div>
+          `
         },
         {
-          title: "2. Banks invested two different pots",
-          body: "Customer deposits are money the bank must still repay. Bank capital is the bank's own safety cushion. Losses on customer-funded investments have to be absorbed by bank capital before customers can be fully protected."
+          title: "Important idea",
+          bodyHtml: `<p class="lead">When a customer deposits CHF 1'000, the bank can invest part of it, but it still owes the customer their money plus the promised return. If the investment loses money, the bank must use its own capital to cover the loss.</p>`
         },
         {
-          title: "3. Bank A result",
-          body: bankExplanationLine("A", game)
+          title: "Bank A: the story",
+          bodyHtml: bankStoryHtml("A", game)
         },
         {
-          title: "4. Bank B result",
-          body: bankExplanationLine("B", game)
+          title: "Bank B: the story",
+          bodyHtml: bankStoryHtml("B", game)
         },
         {
-          title: "5. What customers saw",
-          body: `Customers compared paid returns and trust. Bank A trust is ${game.banks?.A?.trust ?? 100}/100, Bank B trust is ${game.banks?.B?.trust ?? 100}/100. If a bank missed payments or made visible losses, customers had a reason to switch or withdraw.`
+          title: "Why customers reacted",
+          bodyHtml: `<p class="lead">Customers did not only look at the promised return. They also saw whether the bank actually paid and whether trust was falling. Bank A trust: ${game.banks?.A?.trust ?? 100}/100. Bank B trust: ${game.banks?.B?.trust ?? 100}/100.</p>`
         }
       ];
       if (game.rumour) {
         slides.push({
-          title: "6. Market warning",
-          body: "The warning means Bank A is visibly under stress. It is not automatically dead: it can still survive if enough customers stay and future results rebuild capital and trust."
+          title: "Market warning",
+          bodyHtml: `<p class="lead">This was the warning moment: Bank A looked risky. It could still save itself, but only if customers stayed and future results rebuilt capital and trust.</p>`
         });
       }
       if (game.collapsedBank) {
         slides.push({
-          title: "7. Collapse",
-          body: `${bankNames[game.collapsedBank]} collapsed because withdrawal pressure and unpaid obligations exceeded the cash/capital it could use. This shows why liquidity and trust matter, not only profit.`
+          title: "Why the bank crashed",
+          bodyHtml: collapseStoryHtml(game)
         });
       }
       if (game.phase === "leaderboard") {
@@ -2909,7 +3031,7 @@
         const topBank = bankLeaderboardRows(game)[0];
         slides.push({
           title: "Final ranking",
-          body: `Top customer: ${topCustomer ? `${topCustomer.name} with ${money(topCustomer.score)}` : "none yet"}. Top bank: ${topBank ? `${topBank.name} with ${money(topBank.score)}` : "none yet"}. Banks and customers are ranked separately.`
+          bodyHtml: `<p class="lead">Top customer: ${topCustomer ? `${topCustomer.name} with ${money(topCustomer.score)}` : "none yet"}. Top bank: ${topBank ? `${topBank.name} with ${money(topBank.score)}` : "none yet"}. Banks and customers are ranked separately.</p>`
         });
       }
       return slides;
@@ -2922,7 +3044,7 @@
       container.innerHTML = `
         <div class="notice">
           <strong>${slide.title}</strong>
-          <p class="lead" style="margin-top: 8px;">${slide.body}</p>
+          <div style="margin-top: 8px;">${slide.bodyHtml || `<p class="lead">${slide.body}</p>`}</div>
           <small>Slide ${index + 1}/${slides.length}${compact ? " - click Next on the presenter screen" : ""}</small>
         </div>
       `;
