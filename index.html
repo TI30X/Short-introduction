@@ -1158,6 +1158,13 @@
           <aside class="grid">
             <div class="card pad">
               <h3>Controls</h3>
+              <div class="notice" style="margin-top: 12px;">
+                <strong>Answer mode</strong>
+                <div class="grid two" style="margin-top: 10px;">
+                  <button class="button secondary" id="timedMode" type="button">Timed</button>
+                  <button class="button secondary" id="confirmMode" type="button">Wait for confirms</button>
+                </div>
+              </div>
               <div class="grid two" style="margin-top: 14px;">
                 <button class="button" id="startRound">Start Round</button>
                 <button class="button bank-b" id="closeDeposits">Close Deposits</button>
@@ -1173,6 +1180,7 @@
             </div>
             <div class="card pad">
               <h3>Players</h3>
+              <div id="missingAnswers" style="margin-top: 12px;"></div>
               <div class="people-list" id="adminPlayers" style="margin-top: 12px;"></div>
             </div>
           </aside>
@@ -1312,10 +1320,13 @@
       roundHistory: document.getElementById("roundHistory"),
       adminLeaderboard: document.getElementById("adminLeaderboard"),
       adminPlayers: document.getElementById("adminPlayers"),
+      missingAnswers: document.getElementById("missingAnswers"),
       startRound: document.getElementById("startRound"),
       closeDeposits: document.getElementById("closeDeposits"),
       pauseGame: document.getElementById("pauseGame"),
       resumeGame: document.getElementById("resumeGame"),
+      timedMode: document.getElementById("timedMode"),
+      confirmMode: document.getElementById("confirmMode"),
       skipTimer: document.getElementById("skipTimer"),
       goBack: document.getElementById("goBack"),
       endRound: document.getElementById("endRound"),
@@ -1401,6 +1412,7 @@
         phase: "setup",
         round: 1,
         paused: false,
+        waitForAll: false,
         rumour: false,
         ended: false,
         collapsedBank: "",
@@ -1572,6 +1584,27 @@
       });
     }
 
+    async function kickPlayer(playerId) {
+      const player = snapshot.players?.[playerId];
+      if (!player || !confirm(`Remove ${player.name} from the game?`)) return;
+      const nextPlayers = { ...(snapshot.players || {}) };
+      delete nextPlayers[playerId];
+      await playersRef.child(playerId).remove();
+      await presenceRef.child(playerId).remove();
+      if (snapshot.game) {
+        await gameRef.child("banks").set(recomputeBanks(nextPlayers, snapshot.game));
+      }
+    }
+
+    async function setAnswerMode(waitForAll) {
+      const game = snapshot.game;
+      if (!game) return;
+      await gameRef.update({
+        waitForAll,
+        countdownEndsAt: waitForAll || !isAnswerPhase(game) || game.paused ? 0 : Date.now() + TIMER_SECONDS * 1000
+      });
+    }
+
     function enterAdmin() {
       local.isAdmin = true;
       local.role = "admin";
@@ -1595,8 +1628,45 @@
       return customerPlayers().filter(player => player.bank === bank);
     }
 
+    function bankerPlayers() {
+      return Object.values(snapshot.players || {}).filter(player => player.role === "banker");
+    }
+
     function withdrawnCustomers() {
       return customerPlayers().filter(player => !player.bank);
+    }
+
+    function answerProgress(game = snapshot.game) {
+      if (!game) return { answered: 0, total: 0, missing: [], label: "No answers needed" };
+      if (game.phase === "investment") {
+        const bankers = bankerPlayers();
+        const missing = bankers.filter(player => !game.banks?.[player.bank]?.selectedInvestment);
+        return {
+          answered: bankers.length - missing.length,
+          total: bankers.length,
+          missing,
+          label: "Banker investment choices"
+        };
+      }
+      if (game.phase === "decision") {
+        const customers = customerPlayers();
+        const missing = customers.filter(player => !player.choiceMade);
+        return {
+          answered: customers.length - missing.length,
+          total: customers.length,
+          missing,
+          label: "Customer decisions"
+        };
+      }
+      return { answered: 0, total: 0, missing: [], label: "No answers needed" };
+    }
+
+    function isAnswerPhase(game = snapshot.game) {
+      return game?.phase === "investment" || game?.phase === "decision";
+    }
+
+    function countdownForMode(game = snapshot.game) {
+      return game?.waitForAll ? 0 : Date.now() + TIMER_SECONDS * 1000;
     }
 
     function shuffledOptions(bank) {
@@ -1809,7 +1879,7 @@
         });
         await gameRef.update({
           phase: "investment",
-          countdownEndsAt: Date.now() + TIMER_SECONDS * 1000,
+          countdownEndsAt: countdownForMode(game),
           previousGame: undoSnapshot(game),
           banks
         });
@@ -1830,7 +1900,6 @@
       const players = playersSnap.val() || {};
       const banks = recomputeBanks(players, game);
       const playerUpdates = {};
-      const summaries = [];
       const lastResults = {};
       let collapsedBank = "";
 
@@ -1910,16 +1979,24 @@
             : `Warning: ${bankNames[bank]} could NOT pay the promised ${percent(banks[bank].rateOffer)} return. It paid ${percent(paidRate)}.`;
         });
 
-        summaries.push(`${bankNames[bank]} chose ${label}: ${returnRate >= 0 ? "+" : ""}${percent(returnRate)} investment return on ${money(customerInvestment)} customer deposits and ${money(ownCapitalInvestment)} bank capital, paid a ${percent(paidRate)} customer return.`);
-
         if (bank === "A" && game.round >= 4 && !canPay && bankCustomers("A").length <= 1) {
           collapsedBank = "A";
         }
       });
 
+      const paySummary = ["A", "B"].map(bank => {
+        const result = lastResults[bank];
+        const status = result.customers <= 0
+          ? "had no customers to pay"
+          : result.canPay
+            ? `could pay its promised ${percent(result.promisedRate)} return`
+            : `could NOT fully pay; paid ${percent(result.paidRate)} instead of ${percent(result.promisedRate)}`;
+        return `${bankNames[bank]} ${status}.`;
+      }).join(" ");
+
       const history = [...(game.history || []), {
         round: game.round,
-        text: summaries.join(" "),
+        text: paySummary,
         time: Date.now()
       }].slice(-12);
 
@@ -1929,7 +2006,7 @@
         rumour: game.rumour || (game.round >= 4 && !banks.A.solvent),
         collapsedBank,
         ended: Boolean(collapsedBank),
-        countdownEndsAt: collapsedBank ? 0 : Date.now() + TIMER_SECONDS * 1000,
+        countdownEndsAt: collapsedBank ? 0 : countdownForMode(game),
         leaderboardAt: collapsedBank ? Date.now() + 5000 : 0,
         previousGame: undoSnapshot(game),
         banks,
@@ -1943,7 +2020,7 @@
       if (!game || game.phase !== "results") return;
       await gameRef.update({
         phase: "decision",
-        countdownEndsAt: Date.now() + TIMER_SECONDS * 1000
+        countdownEndsAt: countdownForMode(game)
       });
     }
 
@@ -1989,7 +2066,7 @@
       await gameRef.update({
         phase: "investment",
         round: game.phase === "decision" ? game.round + 1 : game.round,
-        countdownEndsAt: Date.now() + TIMER_SECONDS * 1000,
+        countdownEndsAt: countdownForMode(game),
         paused: false,
         previousGame: undoSnapshot(game),
         banks,
@@ -2014,7 +2091,7 @@
     }
 
     async function setPaused(paused) {
-      await gameRef.update({ paused, countdownEndsAt: paused ? 0 : Date.now() + TIMER_SECONDS * 1000 });
+      await gameRef.update({ paused, countdownEndsAt: paused ? 0 : countdownForMode(snapshot.game) });
     }
 
     async function triggerRumour() {
@@ -2077,6 +2154,10 @@
     function presenterTimerText(game) {
       if (!game) return null;
       if (game.paused) return "PAUSED";
+      if (game.waitForAll && isAnswerPhase(game)) {
+        const progress = answerProgress(game);
+        return `${progress.answered}/${progress.total}`;
+      }
       return currentCountdown(game);
     }
 
@@ -2092,6 +2173,10 @@
       });
       if (game?.phase === "ended" && game.leaderboardAt && Date.now() >= game.leaderboardAt && isAdminView()) {
         autoAdvancePhase("ended");
+      }
+      if (game?.waitForAll && isAnswerPhase(game) && isAdminView()) {
+        const progress = answerProgress(game);
+        if (progress.total > 0 && progress.answered >= progress.total) autoAdvancePhase(game.phase);
       }
       if (left === 0 && isAdminView()) autoAdvancePhase(game.phase);
     }
@@ -2435,7 +2520,7 @@
                 </div>
               </div>
               <div class="grid two" style="margin-top: 12px;">
-                <button class="button" id="saveInvestmentAmount" type="button">Save amount</button>
+                <button class="button" id="saveInvestmentAmount" type="button">Safe amount</button>
                 <button class="button danger" id="allInInvestment" type="button">All in</button>
               </div>
               <div class="grid two" style="margin-top: 12px;">
@@ -2462,7 +2547,11 @@
         const customerInput = document.getElementById("customerInvestAmount");
         const ownInput = document.getElementById("ownInvestAmount");
         const saveAmount = () => updateInvestmentAmounts(bank, customerInput.value, ownInput.value);
-        document.getElementById("saveInvestmentAmount").addEventListener("click", saveAmount);
+        document.getElementById("saveInvestmentAmount").addEventListener("click", () => {
+          customerInput.value = Math.round(amountChoice.capacity.customer / 2);
+          ownInput.value = Math.round(amountChoice.capacity.own / 2);
+          updateInvestmentAmounts(bank, customerInput.value, ownInput.value);
+        });
         customerInput.addEventListener("change", saveAmount);
         ownInput.addEventListener("change", saveAmount);
         document.getElementById("allInInvestment").addEventListener("click", () => {
@@ -2553,11 +2642,14 @@
       setScreen(els.adminScreen);
       document.querySelector("#collapseScreen h1").textContent = `${bankNames[game.collapsedBank] || "A bank"} HAS COLLAPSED`;
       els.backToAdmin.classList.toggle("hidden", !isAdminView());
-      els.adminPhaseLine.textContent = `${game.phase.toUpperCase()} - Round ${game.round}${game.paused ? " - Paused" : ""}`;
+      els.adminPhaseLine.textContent = `${game.phase.toUpperCase()} - Round ${game.round}${game.paused ? " - Paused" : ""} - ${game.waitForAll ? "Wait for confirms" : "Timed"}`;
+      els.timedMode.classList.toggle("selected", !game.waitForAll);
+      els.confirmMode.classList.toggle("selected", Boolean(game.waitForAll));
       const banks = recomputeBanks(snapshot.players, game);
       renderAdminBank("A", banks.A, els.adminBankA);
       renderAdminBank("B", banks.B, els.adminBankB);
       renderBars(banks);
+      renderMissingAnswers(game);
       renderPlayers();
       renderHistory(game.history || []);
       renderAdminLeaderboard(game);
@@ -2622,10 +2714,28 @@
         return `
           <div class="person">
             <div>${online} ${player.name}<small>${player.role} - ${where}</small></div>
-            <strong>${player.role === "customer" ? money((player.balance || 0) + (player.cash || 0)) : ""}</strong>
+            <div class="status-line">
+              <strong>${player.role === "customer" ? money((player.balance || 0) + (player.cash || 0)) : ""}</strong>
+              <button class="button danger" data-kick-player="${player.id}" style="min-height: 38px; padding: 8px 10px;">Kick</button>
+            </div>
           </div>
         `;
       }).join("") || `<div class="notice">Waiting for students to join.</div>`;
+    }
+
+    function renderMissingAnswers(game) {
+      const progress = answerProgress(game);
+      if (!isAnswerPhase(game)) {
+        els.missingAnswers.innerHTML = `<div class="notice">No answers needed in this phase.</div>`;
+        return;
+      }
+      const missingNames = progress.missing.map(player => player.name).join(", ") || "Nobody";
+      els.missingAnswers.innerHTML = `
+        <div class="notice ${progress.missing.length ? "warning" : "bank-b"}">
+          <strong>${progress.label}: ${progress.answered}/${progress.total}</strong><br>
+          Missing: ${missingNames}
+        </div>
+      `;
     }
 
     function renderHistory(history) {
@@ -2707,10 +2817,13 @@
       if (timerText !== null) els.projectorTimer.textContent = timerText;
       els.projectorKicker.textContent = `Round ${game.round} - ${game.phase}${game.paused ? " - Paused" : ""}`;
       els.projectorTitle.textContent = game.phase === "leaderboard" ? "Final ranking" : "Run Your Bank";
+      const progress = answerProgress(game);
       els.projectorSubtitle.textContent = game.phase === "leaderboard"
         ? "Student or bank with the most money wins."
         : game.paused
           ? "The game is paused by the presenter."
+          : game.waitForAll && isAnswerPhase(game)
+            ? `${progress.label}: ${progress.answered}/${progress.total} confirmed. ${progress.missing.length} still missing.`
           : game.rumour
             ? "Market warning: Bank A is under stress, but it can still save itself."
             : "Watch the current phase and use this screen for class discussion.";
@@ -2801,6 +2914,8 @@
     els.closeDeposits.addEventListener("click", closeDeposits);
     els.pauseGame.addEventListener("click", () => setPaused(true));
     els.resumeGame.addEventListener("click", () => setPaused(false));
+    els.timedMode.addEventListener("click", () => setAnswerMode(false));
+    els.confirmMode.addEventListener("click", () => setAnswerMode(true));
     els.skipTimer.addEventListener("click", skipTimerNow);
     els.goBack.addEventListener("click", goBackPhase);
     els.endRound.addEventListener("click", endRound);
@@ -2813,11 +2928,14 @@
     document.addEventListener("click", event => {
       const approve = event.target.closest("[data-approve-player]");
       const decline = event.target.closest("[data-decline-player]");
+      const kick = event.target.closest("[data-kick-player]");
       const showJoin = event.target.closest("[data-show-join]");
       if (approve) {
         approvePlayer(approve.dataset.approvePlayer);
       } else if (decline) {
         declinePlayer(decline.dataset.declinePlayer);
+      } else if (kick) {
+        kickPlayer(kick.dataset.kickPlayer);
       } else if (showJoin) {
         setScreen(els.joinScreen);
       }
