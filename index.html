@@ -1872,13 +1872,21 @@
       };
     }
 
-    function trustDelta(customers, returnRate, canPay, promisedRate) {
+    function trustDelta(customers, returnRate, canPay, promisedRate, paidRate) {
       if (customers <= 0) return 0;
-      let delta = canPay ? 1 : -28;
-      if (returnRate < 0) delta += Math.max(-35, Math.round(returnRate * 120));
-      if (returnRate < promisedRate) delta -= Math.ceil((promisedRate - returnRate) * 80);
-      if (returnRate > promisedRate + 0.04) delta += 2;
-      return Math.max(-45, Math.min(6, delta));
+      let delta = canPay ? 2 : -18;
+      if (returnRate < 0) {
+        delta += Math.max(-18, Math.round(returnRate * 45));
+      } else if (returnRate > 0.06) {
+        delta += Math.min(4, Math.round(returnRate * 16));
+      }
+      if (paidRate < promisedRate - 0.0001) {
+        delta -= Math.min(14, Math.ceil((promisedRate - paidRate) * 100));
+      }
+      if (promisedRate > 0.08 && returnRate < 0) {
+        delta -= 2;
+      }
+      return Math.max(-28, Math.min(8, delta));
     }
 
     function recomputeBanks(players = snapshot.players, game = snapshot.game) {
@@ -2252,7 +2260,7 @@
         banks[bank].debt = Math.max(0, -banks[bank].capital) + banks[bank].owedToCustomers;
         banks[bank].lastWithdrawn = Math.max(0, Number(game.banks?.[bank]?.deposits || 0) - banks[bank].deposits);
         banks[bank].solvent = canPay;
-        banks[bank].trust = Math.max(0, Math.min(100, (banks[bank].trust || 100) + trustDelta(banks[bank].customers, returnRate, canPay, banks[bank].rateOffer)));
+        banks[bank].trust = Math.max(0, Math.min(100, (banks[bank].trust || 100) + trustDelta(banks[bank].customers, returnRate, canPay, banks[bank].rateOffer, paidRate)));
         const label = findInvestment(bank, selected, banks[bank])?.name || "No investment";
         lastResults[bank] = {
           label,
