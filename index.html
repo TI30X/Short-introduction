@@ -2658,11 +2658,15 @@
     }
 
     function rumourKey(game) {
-      return `marketWarningAck:${local.id}:${game.round}`;
+      return `marketWarningAck:${local.id}`;
+    }
+
+    function hasAcknowledgedRumour(game) {
+      return storage.getItem(rumourKey(game)) === "yes";
     }
 
     function rumourModal(player, game) {
-      if (!game.rumour || storage.getItem(rumourKey(game)) === "yes") return "";
+      if (!game.rumour || hasAcknowledgedRumour(game)) return "";
       return `
         <div class="rumour-modal" role="dialog" aria-modal="true" aria-labelledby="rumourTitle">
           <div class="rumour-box">
@@ -2681,6 +2685,7 @@
       if (!button) return;
       button.addEventListener("click", () => {
         storage.setItem(rumourKey(game), "yes");
+        document.body.classList.remove("market-flash");
         render();
       });
     }
@@ -3133,14 +3138,11 @@
       });
     }
 
-    function storyBar(label, value, max) {
-      const amount = Number(value || 0);
-      const width = Math.max(4, Math.min(100, Math.abs(amount) / Math.max(max, 1) * 100));
+    function storyMetric(label, value, tone = "") {
       return `
-        <div class="story-row">
+        <div class="metric ${tone}">
           <span>${label}</span>
-          <div class="story-track"><div class="story-fill ${amount < 0 ? "bad" : "good"}" style="width:${width}%"></div></div>
-          <strong>${money(amount)}</strong>
+          <strong>${money(value || 0)}</strong>
         </div>
       `;
     }
@@ -3153,7 +3155,6 @@
       }
       const total = rounds.reduce((sum, round) => sum + Number(round.gain || 0), 0);
       const unpaid = Number(bankState.owedToCustomers || 0);
-      const max = Math.max(...rounds.map(round => Math.abs(Number(round.gain || 0))), Math.abs(total), unpaid, 1);
       const list = rounds.map(round => `
         <li>Round ${round.round}: ${round.label} (${round.returnRate >= 0 ? "+" : ""}${percent(round.returnRate || 0)}) = ${money(round.gain || 0)}</li>
       `).join("");
@@ -3162,10 +3163,10 @@
         : `${bankNames[bank]} could not fully pay customers.`;
       return `
         <ol class="story-list">${list}</ol>
-        <div class="story-chart">
-          ${rounds.map(round => storyBar(`Round ${round.round}`, round.gain || 0, max)).join("")}
-          ${storyBar("Total result", total, max)}
-          ${storyBar("Still owed", -unpaid, max)}
+        <div class="grid three" style="margin-top: 14px;">
+          ${storyMetric("Total profit / loss", total, total < 0 ? "danger" : "bank-b")}
+          ${storyMetric("Still owed", unpaid, unpaid > 0 ? "danger" : "")}
+          <div class="metric"><span>Trust</span><strong>${bankState.trust ?? 100}/100</strong></div>
         </div>
         <p class="lead" style="margin-top: 14px;">${canPayText} Trust is now ${bankState.trust ?? 100}/100.</p>
       `;
@@ -3176,12 +3177,13 @@
       const rounds = bankRoundResults(bank, game);
       const totalLoss = rounds.reduce((sum, round) => sum + Math.min(0, Number(round.gain || 0)), 0);
       const bankState = game.banks?.[bank] || {};
+      const lostDeposits = Number(bankState.lastLostDeposits || 0);
       return `
         <p class="lead">${bankNames[bank]} collapsed because losses and withdrawals became too much at the same time.</p>
-        <div class="story-chart">
-          ${storyBar("Investment losses", totalLoss, Math.max(Math.abs(totalLoss), Number(bankState.owedToCustomers || 0), Math.abs(Number(bankState.capital || 0)), 1))}
-          ${storyBar("Still owed", -Number(bankState.owedToCustomers || 0), Math.max(Math.abs(totalLoss), Number(bankState.owedToCustomers || 0), 1))}
-          ${storyBar("Capital left", Number(bankState.capital || 0), Math.max(Math.abs(totalLoss), Math.abs(Number(bankState.capital || 0)), 1))}
+        <div class="grid three" style="margin-top: 14px;">
+          ${storyMetric("Investment losses", totalLoss, "danger")}
+          ${storyMetric("Capital left", Number(bankState.capital || 0), Number(bankState.capital || 0) < 0 ? "danger" : "bank-b")}
+          ${storyMetric("Customer deposits lost", lostDeposits, lostDeposits > 0 ? "danger" : "")}
         </div>
         <p class="lead" style="margin-top: 14px;">In simple words: it could not repay customers fast enough, so trust broke and the bank lost.</p>
       `;
@@ -3196,10 +3198,10 @@
           title: "Where did the money go?",
           bodyHtml: `
             <p class="lead">${customers.length} customers joined. Their deposits moved between Bank A, Bank B, and cash.</p>
-            <div class="story-chart">
-              ${storyBar("Bank A deposits", banks.A.deposits, Math.max(banks.A.deposits, banks.B.deposits, cash, 1))}
-              ${storyBar("Bank B deposits", banks.B.deposits, Math.max(banks.A.deposits, banks.B.deposits, cash, 1))}
-              ${storyBar("Cash outside banks", cash, Math.max(banks.A.deposits, banks.B.deposits, cash, 1))}
+            <div class="grid three" style="margin-top: 14px;">
+              ${storyMetric("Bank A deposits", banks.A.deposits, "bank-a")}
+              ${storyMetric("Bank B deposits", banks.B.deposits, "bank-b")}
+              ${storyMetric("Cash outside banks", cash)}
             </div>
           `
         },
@@ -3365,7 +3367,7 @@
       if (failedByCapital) {
         endForCapitalCollapse(failedByCapital, game);
       }
-      document.body.classList.toggle("market-flash", Boolean(game.rumour && !game.ended && game.phase !== "leaderboard"));
+      document.body.classList.toggle("market-flash", Boolean(game.rumour && !hasAcknowledgedRumour(game) && !game.ended && game.phase !== "leaderboard"));
       document.body.classList.toggle("end-flash", Boolean(game.ended && game.phase !== "leaderboard"));
       els.roundPill.textContent = `Round ${game.round} - ${game.phase}`;
       if (presenterMode) {
