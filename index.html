@@ -28,6 +28,12 @@
       box-sizing: border-box;
     }
 
+    img,
+    svg,
+    canvas {
+      max-width: 100%;
+    }
+
     body {
       margin: 0;
       min-height: 100vh;
@@ -278,6 +284,10 @@
       grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.15fr);
       gap: 18px;
       align-items: start;
+    }
+
+    #projectorScreen.setup-priority .projector-side {
+      order: -3;
     }
 
     .qr-image {
@@ -542,6 +552,7 @@
     .screen {
       display: none;
       animation: fadeIn 260ms ease both;
+      overflow-wrap: anywhere;
     }
 
     .screen.active {
@@ -905,8 +916,15 @@
       #playerScreen .three,
       #adminScreen .admin-grid,
       #adminScreen .two,
-      #adminScreen .three {
+      #adminScreen .three,
+      #projectorScreen .two,
+      #projectorScreen .three,
+      .projector-side {
         grid-template-columns: 1fr;
+      }
+
+      .projector-hero {
+        flex-wrap: wrap;
       }
 
       .hero-copy {
@@ -949,6 +967,27 @@
 
       .role-buttons {
         grid-template-columns: 1fr;
+      }
+
+      .projector-hero {
+        display: grid;
+        padding: 18px;
+      }
+
+      .projector-timer,
+      .projector-timer.paused {
+        width: 100%;
+        min-width: 0;
+        height: auto;
+        min-height: 76px;
+        border-radius: var(--radius);
+        font-size: 2rem;
+      }
+
+      .projector-tile,
+      .projector-slide {
+        min-height: auto;
+        padding: 16px;
       }
 
       .rumour-modal {
@@ -1308,6 +1347,7 @@
                 <button class="button secondary" id="goBack">Go Back</button>
                 <button class="button bank-a" id="endRound">End Round</button>
                 <button class="button danger" id="triggerRumour">Trigger Market Warning</button>
+                <button class="button danger" id="quickFinish">Quick Finish: 2 Loss Rounds</button>
                 <button class="button danger" id="endGame">End Game</button>
                 <button class="button secondary" id="resetGame">Reset Game</button>
               </div>
@@ -1398,6 +1438,9 @@
     const RESERVE_RATIO = 0.18;
     const TIMER_SECONDS = 20;
     const STARTING_CAPITAL = 2500;
+    const MIN_STARTING_CAPITAL = 2500;
+    const STRESS_PROMISED_RATE = 0.10;
+    const STRESS_LOSS_RATE = 0.31;
     const bankNames = {
       A: "Bank A",
       B: "Bank B"
@@ -1475,6 +1518,7 @@
       goBack: document.getElementById("goBack"),
       endRound: document.getElementById("endRound"),
       triggerRumour: document.getElementById("triggerRumour"),
+      quickFinish: document.getElementById("quickFinish"),
       endGame: document.getElementById("endGame"),
       resetGame: document.getElementById("resetGame"),
       backToAdmin: document.getElementById("backToAdmin")
@@ -1564,6 +1608,7 @@
         waitForAll: false,
         rumour: false,
         rumourId: "",
+        quickFinish: null,
         ended: false,
         collapsedBank: "",
         countdownEndsAt: 0,
@@ -1722,6 +1767,7 @@
         };
         return players;
       });
+      await syncSetupCapital();
     }
 
     async function declinePlayer(playerId) {
@@ -1744,6 +1790,7 @@
       await presenceRef.child(playerId).remove();
       if (snapshot.game) {
         await gameRef.child("banks").set(recomputeBanks(nextPlayers, snapshot.game));
+        await syncSetupCapital();
       }
     }
 
@@ -1769,6 +1816,30 @@
 
     function customerPlayers() {
       return Object.values(snapshot.players || {}).filter(player => player.role === "customer");
+    }
+
+    function approvedPlayerCount(players = snapshot.players) {
+      return Object.values(players || {}).filter(player => ["banker", "customer"].includes(player.role)).length;
+    }
+
+    function scaledStartingCapital(players = snapshot.players) {
+      const count = Math.max(1, approvedPlayerCount(players));
+      const deposits = count * CUSTOMER_DEPOSIT;
+      const defaultCustomerInvestment = deposits * (1 - RESERVE_RATIO) * 0.7;
+      const capitalNeeded = ((defaultCustomerInvestment * STRESS_LOSS_RATE) + (deposits * STRESS_PROMISED_RATE) + 100) / (1 - (0.5 * STRESS_LOSS_RATE));
+      return Math.max(MIN_STARTING_CAPITAL, Math.ceil(capitalNeeded / 50) * 50);
+    }
+
+    async function syncSetupCapital() {
+      const game = snapshot.game;
+      if (!game || game.phase !== "setup" || Number(game.round || 1) !== 1) return;
+      const playersSnap = await playersRef.get();
+      const players = playersSnap.val() || {};
+      const capital = scaledStartingCapital(players);
+      await gameRef.update({
+        "banks/A/capital": capital,
+        "banks/B/capital": capital
+      });
     }
 
     function bankerFor(bank) {
@@ -2190,7 +2261,11 @@
       await playersRef.once("value").then(async snap => {
         const players = snap.val() || {};
         const banks = recomputeBanks(players, game);
+        const setupCapital = game.phase === "setup" && Number(game.round || 1) === 1
+          ? scaledStartingCapital(players)
+          : null;
         ["A", "B"].forEach(bank => {
+          if (setupCapital !== null) banks[bank].capital = setupCapital;
           banks[bank].selectedInvestment = "";
           banks[bank].selectedLabel = "";
           banks[bank].confirmedInvestment = false;
@@ -2207,8 +2282,11 @@
       });
     }
 
-    function getInvestmentReturn(bank, optionId, round, bankState) {
+    function getInvestmentReturn(bank, optionId, round, bankState, game = snapshot.game) {
       const option = findInvestment(bank, optionId, bankState);
+      if (game?.quickFinish?.active && bank === game.quickFinish.targetBank) {
+        return option.loss;
+      }
       const earlyBoost = bank === "A" && round <= 2 ? 0.12 : 0;
       const chance = Math.max(0.05, Math.min(0.95, Number(option.chance || 0.5) + earlyBoost));
       return Math.random() < chance ? option.win : option.loss;
@@ -2227,7 +2305,7 @@
       ["A", "B"].forEach(bank => {
         const autoOption = randomOption(bank, banks[bank]);
         const selected = banks[bank].selectedInvestment || autoOption.id;
-        const returnRate = getInvestmentReturn(bank, selected, game.round, banks[bank]);
+        const returnRate = getInvestmentReturn(bank, selected, game.round, banks[bank], game);
         const amountChoice = selectedInvestmentAmounts(banks[bank]);
         const customerInvestment = amountChoice.customer;
         const ownCapitalInvestment = amountChoice.own;
@@ -2325,6 +2403,16 @@
         time: Date.now()
       }].slice(-12);
 
+      const quickFinish = game.quickFinish?.active
+        ? {
+            ...game.quickFinish,
+            roundsLeft: Math.max(0, Number(game.quickFinish.roundsLeft || 0) - 1)
+          }
+        : null;
+      if (!collapsedBank && quickFinish?.active && quickFinish.roundsLeft <= 0) {
+        collapsedBank = quickFinish.targetBank || "A";
+      }
+
       await playersRef.update(playerUpdates);
       let finalBanks = banks;
       let finalHistory = history;
@@ -2354,6 +2442,7 @@
         phase: collapsedBank ? "ended" : "decision",
         rumour: shouldWarn,
         rumourId: shouldWarn ? (game.rumourId || `warning-${Date.now()}`) : "",
+        quickFinish: collapsedBank ? null : quickFinish,
         collapsedBank,
         ended: Boolean(collapsedBank),
         countdownEndsAt: collapsedBank ? 0 : countdownForMode(game),
@@ -2462,6 +2551,48 @@
 
     async function triggerRumour() {
       await gameRef.update({ rumour: true, rumourId: `warning-${Date.now()}` });
+    }
+
+    async function startQuickFinish() {
+      const game = snapshot.game;
+      if (!game || game.ended || game.phase === "leaderboard") return;
+      const quickFinish = {
+        active: true,
+        targetBank: "A",
+        roundsLeft: 2
+      };
+      if (game.phase === "investment") {
+        await gameRef.update({
+          quickFinish,
+          rumour: true,
+          rumourId: `warning-${Date.now()}`,
+          countdownEndsAt: countdownForMode(game),
+          paused: false
+        });
+        return;
+      }
+      const playersSnap = await playersRef.get();
+      const players = playersSnap.val() || {};
+      const banks = recomputeBanks(players, game);
+      ["A", "B"].forEach(bank => {
+        banks[bank].selectedInvestment = "";
+        banks[bank].selectedLabel = "";
+        banks[bank].confirmedInvestment = false;
+        delete banks[bank].selectedCustomerInvestment;
+        delete banks[bank].selectedOwnCapitalInvestment;
+        banks[bank].availableOptions = shuffledOptions(bank);
+      });
+      await gameRef.update({
+        phase: "investment",
+        round: game.phase === "decision" ? game.round + 1 : game.round,
+        quickFinish,
+        rumour: true,
+        rumourId: `warning-${Date.now()}`,
+        countdownEndsAt: countdownForMode(game),
+        paused: false,
+        previousGame: undoSnapshot(game),
+        banks
+      });
     }
 
     async function moveExplanationSlide(delta) {
@@ -2864,7 +2995,8 @@
             <label for="rateOffer">Deposit yield offer</label>
             <input id="rateOffer" type="range" min="${minRate}" max="${maxRate}" step="0.5" value="${bankState.rateOffer * 100}" />
             <div class="metric ${className}" style="margin-top: 14px;"><span>Promised return</span><strong id="rateOfferLabel">${percent(bankState.rateOffer)}</strong></div>
-            <div class="metric" style="margin-top: 14px;"><span>Starting capital insurance</span><strong>${money(bankState.capital ?? STARTING_CAPITAL)}</strong></div>
+            <div class="metric" style="margin-top: 14px;"><span>Starting capital</span><strong>${money(bankState.capital ?? scaledStartingCapital())}</strong></div>
+            <div class="notice" style="margin-top: 14px;">Both banks receive the same starting capital. It is based on the total number of approved players, with at least CHF 2'500, so the game stays fair even if not everyone shows up.</div>
             <div class="notice" style="margin-top: 14px;">Range: ${minRate}% to ${maxRate}%. Customers will choose one bank when the presenter closes deposits.</div>
           </div>
           ${rumourModal(player, game)}
@@ -3053,6 +3185,7 @@
       els.adminPhaseLine.textContent = `${game.phase.toUpperCase()} - Round ${game.round}${game.paused ? " - Paused" : ""} - ${game.waitForAll ? "Wait for confirms" : "Timed"}`;
       els.timedMode.classList.toggle("selected", !game.waitForAll);
       els.confirmMode.classList.toggle("selected", Boolean(game.waitForAll));
+      els.quickFinish.classList.toggle("selected", Boolean(game.quickFinish?.active));
       const banks = recomputeBanks(snapshot.players, game);
       renderAdminBank("A", banks.A, els.adminBankA);
       renderAdminBank("B", banks.B, els.adminBankB);
@@ -3333,7 +3466,7 @@
       }
       if (game.phase === "investment") {
         return [
-          ["Banker job", "Choose how much customer-deposit money and bank capital to invest, then choose one investment option."],
+          ["Banker job", game.quickFinish?.active ? "Quick finish is active: Bank A will face forced losses so the game can end quickly." : "Choose how much customer-deposit money and bank capital to invest, then choose one investment option."],
           ["Customer job", "Wait and watch. Your bank is using deposits to try to earn enough to pay the promised return."]
         ];
       }
@@ -3373,6 +3506,7 @@
 
     function renderProjector(game) {
       setScreen(els.projectorScreen);
+      els.projectorScreen.classList.toggle("setup-priority", game.phase === "setup");
       const timerText = presenterTimerText(game);
       els.projectorTimer.classList.toggle("hidden", timerText === null);
       els.projectorTimer.classList.toggle("paused", timerText === "PAUSED");
@@ -3494,6 +3628,7 @@
     els.goBack.addEventListener("click", goBackPhase);
     els.endRound.addEventListener("click", endRound);
     els.triggerRumour.addEventListener("click", triggerRumour);
+    els.quickFinish.addEventListener("click", startQuickFinish);
     els.endGame.addEventListener("click", endGame);
     els.resetGame.addEventListener("click", resetGame);
     els.backToAdmin.addEventListener("click", () => {
