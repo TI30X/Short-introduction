@@ -1619,7 +1619,8 @@
     let musicState = {
       context: null,
       master: null,
-      nodes: [],
+      timer: null,
+      step: 0,
       playing: false
     };
 
@@ -1627,6 +1628,20 @@
       const rounded = Math.round(Number(value) || 0);
       const sign = rounded < 0 ? "-" : "";
       return `CHF ${sign}${Math.abs(rounded).toString().replace(/\B(?=(\d{3})+(?!\d))/g, "'")}`;
+    }
+
+    function resultTone(value) {
+      const number = Number(value || 0);
+      if (number < 0) return "danger";
+      if (number > 0) return "bank-b";
+      return "";
+    }
+
+    function rateTone(value) {
+      const number = Number(value || 0);
+      if (number < 0) return "danger";
+      if (number > 0) return "bank-b";
+      return "";
     }
 
     function percent(value) {
@@ -2011,11 +2026,15 @@
 
     function trustDelta(customers, returnRate, canPay, promisedRate, paidRate) {
       if (customers <= 0) return 0;
-      let delta = canPay ? 2 : -18;
-      if (returnRate < 0) {
-        delta += Math.max(-18, Math.round(returnRate * 45));
+      let delta = 0;
+      if (!canPay) {
+        delta = -18;
+      } else if (returnRate < 0) {
+        delta = Math.min(-1, Math.max(-14, Math.round(returnRate * 120)));
       } else if (returnRate > 0.06) {
-        delta += Math.min(4, Math.round(returnRate * 16));
+        delta = Math.min(4, Math.max(1, Math.round(returnRate * 18)));
+      } else if (returnRate > 0) {
+        delta = 1;
       }
       if (paidRate < promisedRate - 0.0001) {
         delta -= Math.min(14, Math.ceil((promisedRate - paidRate) * 100));
@@ -2703,36 +2722,62 @@
       if (!musicState.context) {
         const context = new AudioContext();
         const master = context.createGain();
-        const filter = context.createBiquadFilter();
-        filter.type = "lowpass";
-        filter.frequency.value = 900;
-        filter.Q.value = 0.6;
+        const compressor = context.createDynamicsCompressor();
         master.gain.value = 0.0001;
-        filter.connect(master);
-        master.connect(context.destination);
-        const notes = [130.81, 196.00, 246.94, 329.63];
-        const nodes = notes.map((frequency, index) => {
-          const osc = context.createOscillator();
-          const gain = context.createGain();
-          osc.type = index % 2 ? "sine" : "triangle";
-          osc.frequency.value = frequency;
-          gain.gain.value = index === 0 ? 0.34 : 0.18;
-          osc.connect(gain);
-          gain.connect(filter);
-          osc.start();
-          return { osc, gain };
-        });
-        musicState = { context, master, nodes, playing: false };
+        master.connect(compressor);
+        compressor.connect(context.destination);
+        musicState = { context, master, timer: null, step: 0, playing: false };
       }
       await musicState.context.resume();
       musicState.playing = true;
       setLocalMusicVolume(musicVolumeValue());
+      if (!musicState.timer) {
+        musicState.timer = setInterval(playMusicStep, 155);
+        playMusicStep();
+      }
+    }
+
+    function playTone(frequency, duration = 0.14, type = "triangle", level = 0.24) {
+      if (!musicState.context || !musicState.master || !musicState.playing) return;
+      const context = musicState.context;
+      const now = context.currentTime;
+      const osc = context.createOscillator();
+      const gain = context.createGain();
+      const filter = context.createBiquadFilter();
+      osc.type = type;
+      osc.frequency.setValueAtTime(frequency, now);
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(type === "square" ? 1400 : 2200, now);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(level, now + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(musicState.master);
+      osc.start(now);
+      osc.stop(now + duration + 0.03);
+    }
+
+    function playMusicStep() {
+      if (!musicState.playing) return;
+      const melody = [392.00, 493.88, 587.33, 659.25, 587.33, 493.88, 523.25, 440.00];
+      const bass = [130.81, 130.81, 146.83, 164.81];
+      const step = musicState.step % 16;
+      if (step % 4 === 0) playTone(bass[Math.floor(step / 4)], 0.18, "sine", 0.26);
+      if (step % 2 === 0) playTone(melody[(step / 2) % melody.length], 0.11, "triangle", 0.18);
+      if (step % 4 === 2) playTone(melody[((step / 2) + 2) % melody.length] * 1.5, 0.08, "sine", 0.09);
+      if (step % 4 === 3) playTone(1046.50, 0.035, "square", 0.025);
+      musicState.step += 1;
     }
 
     function stopMusic() {
       if (!musicState.master || !musicState.context) return;
       musicState.master.gain.setTargetAtTime(0.0001, musicState.context.currentTime, 0.18);
       musicState.playing = false;
+      if (musicState.timer) {
+        clearInterval(musicState.timer);
+        musicState.timer = null;
+      }
     }
 
     function syncMusic(game) {
@@ -2984,13 +3029,13 @@
           <div class="metric ${className}"><span>Investment</span><strong>${result.label || "No choice"}</strong></div>
           <div class="notice ${result.returnRate < 0 ? "warning" : ""}">Risk taken: <strong>${result.risk || "Not revealed"}</strong>. Expected range shown to banker: ${result.shown || "No range available"}.</div>
           <div class="grid two">
-            <div class="metric"><span>Return</span><strong>${result.returnRate >= 0 ? "+" : ""}${percent(result.returnRate || 0)}</strong></div>
+            <div class="metric ${rateTone(result.returnRate)}"><span>Return</span><strong>${result.returnRate >= 0 ? "+" : ""}${percent(result.returnRate || 0)}</strong></div>
             <div class="metric"><span>Trust level</span><strong>${snapshot.game?.banks?.[bank]?.trust ?? 100}/100</strong></div>
             <div class="metric"><span>Customer money invested</span><strong>${money(result.customerInvestment || 0)}</strong></div>
             <div class="metric"><span>Bank capital invested</span><strong>${money(result.ownCapitalInvestment || 0)}</strong></div>
-            <div class="metric"><span>Customer-fund result</span><strong>${money(result.customerFundGain || 0)}</strong></div>
-            <div class="metric"><span>Own-capital result</span><strong>${money(result.ownCapitalGain || 0)}</strong></div>
-            <div class="metric danger"><span>Deposit loss covered by capital</span><strong>${money(result.customerDepositLossCovered || 0)}</strong></div>
+            <div class="metric ${resultTone(result.customerFundGain)}"><span>Customer-fund result</span><strong>${money(result.customerFundGain || 0)}</strong></div>
+            <div class="metric ${resultTone(result.ownCapitalGain)}"><span>Own-capital result</span><strong>${money(result.ownCapitalGain || 0)}</strong></div>
+            <div class="metric ${Number(result.customerDepositLossCovered || 0) > 0 ? "danger" : ""}"><span>Deposit loss covered by capital</span><strong>${money(result.customerDepositLossCovered || 0)}</strong></div>
             <div class="metric ${result.canPay === false ? "danger" : "bank-b"}"><span>Paid return</span><strong>${percent(result.paidRate || 0)}</strong></div>
             <div class="metric"><span>Repaid old debt</span><strong>${money(result.repaid || 0)}</strong></div>
             <div class="metric danger"><span>Unpaid return</span><strong>${money(result.unpaidInterest || 0)}</strong></div>
@@ -3284,15 +3329,15 @@
           <div class="grid">
             <div class="notice ${bankState.customers === 0 || bankState.solvent ? "" : "danger"}">${resultNotice}</div>
             <div class="grid three">
-              <div class="metric ${className}"><span>Return</span><strong>${money(bankState.lastReturn)}</strong></div>
+              <div class="metric ${resultTone(bankState.lastReturn)}"><span>Return</span><strong>${money(bankState.lastReturn)}</strong></div>
               <div class="metric"><span>Paid rate</span><strong>${percent(bankState.lastPaidRate)}</strong></div>
               <div class="metric"><span>Trust</span><strong>${bankState.trust}/100</strong></div>
               <div class="metric"><span>Customer money invested</span><strong>${money(game.lastResults?.[bank]?.customerInvestment || 0)}</strong></div>
               <div class="metric"><span>Bank capital invested</span><strong>${money(game.lastResults?.[bank]?.ownCapitalInvestment || 0)}</strong></div>
-              <div class="metric"><span>Customer-fund result</span><strong>${money(game.lastResults?.[bank]?.customerFundGain || 0)}</strong></div>
-              <div class="metric"><span>Own-capital result</span><strong>${money(game.lastResults?.[bank]?.ownCapitalGain || 0)}</strong></div>
-              <div class="metric danger"><span>Deposit loss covered</span><strong>${money(game.lastResults?.[bank]?.customerDepositLossCovered || 0)}</strong></div>
-              <div class="metric"><span>Capital</span><strong>${money(bankState.capital || 0)}</strong></div>
+              <div class="metric ${resultTone(game.lastResults?.[bank]?.customerFundGain)}"><span>Customer-fund result</span><strong>${money(game.lastResults?.[bank]?.customerFundGain || 0)}</strong></div>
+              <div class="metric ${resultTone(game.lastResults?.[bank]?.ownCapitalGain)}"><span>Own-capital result</span><strong>${money(game.lastResults?.[bank]?.ownCapitalGain || 0)}</strong></div>
+              <div class="metric ${Number(game.lastResults?.[bank]?.customerDepositLossCovered || 0) > 0 ? "danger" : ""}"><span>Deposit loss covered</span><strong>${money(game.lastResults?.[bank]?.customerDepositLossCovered || 0)}</strong></div>
+              <div class="metric ${resultTone(bankState.capital || 0)}"><span>Capital</span><strong>${money(bankState.capital || 0)}</strong></div>
               <div class="metric"><span>Withdrawn</span><strong>${money(bankState.lastWithdrawn || 0)}</strong></div>
               <div class="metric danger"><span>Owed to customers</span><strong>${money(bankState.owedToCustomers || 0)}</strong></div>
             </div>
@@ -3382,8 +3427,8 @@
           <div class="metric"><span>Customers</span><strong>${bankState.customers}</strong></div>
           <div class="metric"><span>Yield offer</span><strong>${percent(bankState.rateOffer)}</strong></div>
           <div class="metric"><span>Trust</span><strong>${bankState.trust}/100</strong></div>
-          <div class="metric"><span>Capital</span><strong>${money(bankState.capital || 0)}</strong></div>
-          <div class="metric danger"><span>Debt / owed</span><strong>${money(bankState.debt || 0)}</strong></div>
+          <div class="metric ${resultTone(bankState.capital || 0)}"><span>Capital</span><strong>${money(bankState.capital || 0)}</strong></div>
+          <div class="metric ${Number(bankState.debt || 0) > 0 ? "danger" : ""}"><span>Debt / owed</span><strong>${money(bankState.debt || 0)}</strong></div>
         </div>
       `;
     }
@@ -3657,7 +3702,7 @@
 
     function projectorBankTile(bank, bankState) {
       const result = Number(bankState.lastReturn || 0);
-      const resultClass = result < 0 ? "danger" : "bank-b";
+      const resultClass = resultTone(result);
       const investment = bankState.selectedLabel || "No investment yet";
       return `
         <div class="projector-tile">
