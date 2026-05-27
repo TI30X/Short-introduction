@@ -286,8 +286,12 @@
       align-items: start;
     }
 
-    #projectorScreen.setup-priority .projector-side {
+    #projectorScreen.setup-priority .projector-hero {
       order: -3;
+    }
+
+    #projectorScreen.setup-priority .projector-side {
+      order: -2;
     }
 
     .qr-image {
@@ -437,7 +441,7 @@
       background: var(--navy);
       color: white;
       font-weight: 900;
-      transition: transform 160ms ease, filter 160ms ease, opacity 160ms ease;
+      transition: transform 120ms ease, filter 160ms ease, opacity 160ms ease, box-shadow 160ms ease, outline-color 160ms ease;
       text-align: center;
     }
 
@@ -473,11 +477,20 @@
       filter: brightness(1.03);
     }
 
+    .button:active:not(:disabled),
+    .role-btn:active:not(:disabled),
+    .option:active:not(:disabled) {
+      transform: translateY(1px) scale(0.99);
+      filter: brightness(0.96);
+      box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.18);
+    }
+
     .button.selected,
     .option.selected {
-      outline: 4px solid rgba(79, 195, 247, 0.28);
-      border: 1px solid var(--blue);
-      box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.12);
+      outline: 4px solid rgba(79, 195, 247, 0.45);
+      border: 2px solid var(--blue);
+      box-shadow: 0 0 0 3px rgba(79, 195, 247, 0.16), inset 0 0 0 999px rgba(255, 255, 255, 0.08);
+      transform: translateY(1px);
     }
 
     .status-line {
@@ -870,6 +883,33 @@
 
     .hidden {
       display: none !important;
+    }
+
+    #playerScreen {
+      width: min(680px, 100%);
+      margin-inline: auto;
+    }
+
+    #playerScreen .grid {
+      gap: 16px;
+    }
+
+    #playerScreen .customer-choice-grid,
+    #playerScreen .customer-action-grid {
+      grid-template-columns: 1fr;
+    }
+
+    #playerScreen .customer-choice-grid .bank-card {
+      min-height: auto;
+    }
+
+    #playerScreen .setup-choice-card {
+      display: grid;
+      gap: 14px;
+    }
+
+    #playerScreen .setup-choice-card .lead {
+      margin-top: 0;
     }
 
     @keyframes fadeIn {
@@ -1338,6 +1378,16 @@
                   <button class="button secondary" id="confirmMode" type="button">Wait for confirms</button>
                 </div>
               </div>
+              <div class="notice" style="margin-top: 12px;">
+                <strong>Background music</strong>
+                <div class="grid two" style="margin-top: 10px;">
+                  <button class="button secondary" id="toggleMusic" type="button">Music Off</button>
+                  <div>
+                    <label for="musicVolume">Volume <span id="musicVolumeLabel">18%</span></label>
+                    <input id="musicVolume" type="range" min="0" max="40" step="1" value="18" />
+                  </div>
+                </div>
+              </div>
               <div class="grid two" style="margin-top: 14px;">
                 <button class="button" id="startRound">Start Round</button>
                 <button class="button bank-b" id="closeDeposits">Close Deposits</button>
@@ -1346,6 +1396,7 @@
                 <button class="button" id="skipTimer">Skip Timer</button>
                 <button class="button secondary" id="goBack">Go Back</button>
                 <button class="button bank-a" id="endRound">End Round</button>
+                <button class="button secondary" id="toggleSlides">Show Slides</button>
                 <button class="button danger" id="triggerRumour">Trigger Market Warning</button>
                 <button class="button danger" id="quickFinish">Quick Finish: 2 Loss Rounds</button>
                 <button class="button danger" id="endGame">End Game</button>
@@ -1514,9 +1565,13 @@
       resumeGame: document.getElementById("resumeGame"),
       timedMode: document.getElementById("timedMode"),
       confirmMode: document.getElementById("confirmMode"),
+      toggleMusic: document.getElementById("toggleMusic"),
+      musicVolume: document.getElementById("musicVolume"),
+      musicVolumeLabel: document.getElementById("musicVolumeLabel"),
       skipTimer: document.getElementById("skipTimer"),
       goBack: document.getElementById("goBack"),
       endRound: document.getElementById("endRound"),
+      toggleSlides: document.getElementById("toggleSlides"),
       triggerRumour: document.getElementById("triggerRumour"),
       quickFinish: document.getElementById("quickFinish"),
       endGame: document.getElementById("endGame"),
@@ -1561,6 +1616,12 @@
     };
     let autoAdvanceInFlight = false;
     let capitalCollapseInFlight = false;
+    let musicState = {
+      context: null,
+      master: null,
+      nodes: [],
+      playing: false
+    };
 
     function money(value) {
       const rounded = Math.round(Number(value) || 0);
@@ -1608,6 +1669,8 @@
         waitForAll: false,
         rumour: false,
         rumourId: "",
+        musicOn: false,
+        musicVolume: 0.18,
         quickFinish: null,
         ended: false,
         collapsedBank: "",
@@ -1619,6 +1682,7 @@
         lastResults: {},
         previousGame: null,
         explanationSlide: 0,
+        showSlides: false,
         history: []
       };
     }
@@ -1631,6 +1695,8 @@
         const game = snap.val() || {};
         const updates = {};
         if (!game.lastResults) updates.lastResults = {};
+        if (game.musicOn === undefined) updates.musicOn = false;
+        if (game.musicVolume === undefined) updates.musicVolume = 0.18;
         if (game.phase === "results") updates.phase = "decision";
         if (game.banks?.A && Number(game.banks.A.rateOffer || 0) < 0.04) updates["banks/A/rateOffer"] = 0.04;
         if (game.banks?.B && Number(game.banks.B.rateOffer || 0) > 0.05) updates["banks/B/rateOffer"] = 0.05;
@@ -2292,6 +2358,14 @@
       return Math.random() < chance ? option.win : option.loss;
     }
 
+    function isBankAMajorLoss(result, bankState = {}) {
+      if (!result) return false;
+      const loss = Number(result.gain || 0);
+      const returnRate = Number(result.returnRate || 0);
+      const capital = Number(bankState.capital || 0);
+      return returnRate <= -0.15 || loss <= -500 || capital < 0 || result.canPay === false;
+    }
+
     async function revealResults() {
       const game = snapshot.game;
       if (!game || game.phase !== "investment") return;
@@ -2437,7 +2511,8 @@
           time: Date.now()
         }].slice(-12);
       }
-      const shouldWarn = game.rumour || (game.round >= 4 && !banks.A.solvent);
+      const bankAMajorLoss = isBankAMajorLoss(lastResults.A, banks.A);
+      const shouldWarn = !collapsedBank && game.round >= 3 && bankAMajorLoss;
       await gameRef.update({
         phase: collapsedBank ? "ended" : "decision",
         rumour: shouldWarn,
@@ -2550,6 +2625,12 @@
     }
 
     async function triggerRumour() {
+      const game = snapshot.game;
+      if (!game) return;
+      if (!isBankAMajorLoss(game.lastResults?.A, game.banks?.A)) {
+        alert("Market warning is only available after Bank A has suffered a major loss or missed a promised return.");
+        return;
+      }
       await gameRef.update({ rumour: true, rumourId: `warning-${Date.now()}` });
     }
 
@@ -2564,8 +2645,6 @@
       if (game.phase === "investment") {
         await gameRef.update({
           quickFinish,
-          rumour: true,
-          rumourId: `warning-${Date.now()}`,
           countdownEndsAt: countdownForMode(game),
           paused: false
         });
@@ -2586,8 +2665,6 @@
         phase: "investment",
         round: game.phase === "decision" ? game.round + 1 : game.round,
         quickFinish,
-        rumour: true,
-        rumourId: `warning-${Date.now()}`,
         countdownEndsAt: countdownForMode(game),
         paused: false,
         previousGame: undoSnapshot(game),
@@ -2602,6 +2679,95 @@
       const current = Number(game.explanationSlide || 0);
       const next = Math.max(0, Math.min(slides.length - 1, current + delta));
       await gameRef.update({ explanationSlide: next });
+    }
+
+    async function toggleSlides() {
+      const game = snapshot.game;
+      if (!game) return;
+      await gameRef.update({ showSlides: !Boolean(game.showSlides) });
+    }
+
+    function musicVolumeValue(game = snapshot.game) {
+      return Math.max(0, Math.min(0.4, Number(game?.musicVolume ?? 0.18)));
+    }
+
+    function setLocalMusicVolume(volume) {
+      if (!musicState.master || !musicState.context) return;
+      const target = Math.max(0, Math.min(0.08, volume * 0.2));
+      musicState.master.gain.setTargetAtTime(target, musicState.context.currentTime, 0.25);
+    }
+
+    async function startMusic() {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      if (!musicState.context) {
+        const context = new AudioContext();
+        const master = context.createGain();
+        const filter = context.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.value = 900;
+        filter.Q.value = 0.6;
+        master.gain.value = 0.0001;
+        filter.connect(master);
+        master.connect(context.destination);
+        const notes = [130.81, 196.00, 246.94, 329.63];
+        const nodes = notes.map((frequency, index) => {
+          const osc = context.createOscillator();
+          const gain = context.createGain();
+          osc.type = index % 2 ? "sine" : "triangle";
+          osc.frequency.value = frequency;
+          gain.gain.value = index === 0 ? 0.34 : 0.18;
+          osc.connect(gain);
+          gain.connect(filter);
+          osc.start();
+          return { osc, gain };
+        });
+        musicState = { context, master, nodes, playing: false };
+      }
+      await musicState.context.resume();
+      musicState.playing = true;
+      setLocalMusicVolume(musicVolumeValue());
+    }
+
+    function stopMusic() {
+      if (!musicState.master || !musicState.context) return;
+      musicState.master.gain.setTargetAtTime(0.0001, musicState.context.currentTime, 0.18);
+      musicState.playing = false;
+    }
+
+    function syncMusic(game) {
+      const volume = musicVolumeValue(game);
+      if (els.toggleMusic) {
+        els.toggleMusic.classList.toggle("selected", Boolean(game.musicOn));
+        els.toggleMusic.textContent = game.musicOn ? "Music On" : "Music Off";
+      }
+      if (els.musicVolume) {
+        const percentValue = Math.round(volume * 100);
+        if (document.activeElement !== els.musicVolume) els.musicVolume.value = percentValue;
+        els.musicVolumeLabel.textContent = `${percentValue}%`;
+      }
+      if (game.musicOn) {
+        startMusic().catch(() => {});
+        setLocalMusicVolume(volume);
+      } else {
+        stopMusic();
+      }
+    }
+
+    async function toggleMusic() {
+      const game = snapshot.game;
+      if (!game) return;
+      const next = !Boolean(game.musicOn);
+      if (next) await startMusic().catch(() => {});
+      else stopMusic();
+      await gameRef.update({ musicOn: next, musicVolume: musicVolumeValue(game) });
+    }
+
+    async function updateMusicVolume(value) {
+      const volume = Math.max(0, Math.min(0.4, Number(value || 0) / 100));
+      if (els.musicVolumeLabel) els.musicVolumeLabel.textContent = `${Math.round(volume * 100)}%`;
+      setLocalMusicVolume(volume);
+      await gameRef.update({ musicVolume: volume });
     }
 
     async function endGame() {
@@ -2813,7 +2979,7 @@
     function roundResultCard(bank, result) {
       const className = bank === "A" ? "bank-a" : "bank-b";
       return `
-        <article class="bank-card ${className}">
+        <article class="bank-card ${className} setup-choice-card">
           <h3>${bankNames[bank]}</h3>
           <div class="metric ${className}"><span>Investment</span><strong>${result.label || "No choice"}</strong></div>
           <div class="notice ${result.returnRate < 0 ? "warning" : ""}">Risk taken: <strong>${result.risk || "Not revealed"}</strong>. Expected range shown to banker: ${result.shown || "No range available"}.</div>
@@ -2877,7 +3043,7 @@
         els.playerContent.innerHTML = `
           <div class="notice"><strong>Your job:</strong> Decide how much of your CHF 1'000 to deposit, then choose a bank. Compare the offered return and trust level. You can still change amount or bank until deposits close.</div>
           ${depositControl(player, "setup")}
-          <div class="grid two">
+          <div class="grid customer-choice-grid">
             ${bankChoiceCard("A", game.banks.A, player.bank)}
             ${bankChoiceCard("B", game.banks.B, player.bank)}
           </div>
@@ -2930,7 +3096,7 @@
               <div class="metric danger"><span>Still owed to you</span><strong>${money(player.owed || 0)}</strong></div>
             </div>
             ${depositControl(player, "decision")}
-            <div class="grid three">
+            <div class="grid customer-action-grid">
               ${actionButtons}
             </div>
             ${game.waitForAll ? `
@@ -3186,6 +3352,9 @@
       els.timedMode.classList.toggle("selected", !game.waitForAll);
       els.confirmMode.classList.toggle("selected", Boolean(game.waitForAll));
       els.quickFinish.classList.toggle("selected", Boolean(game.quickFinish?.active));
+      els.toggleSlides.classList.toggle("selected", Boolean(game.showSlides));
+      els.toggleSlides.textContent = game.showSlides ? "Hide Slides" : "Show Slides";
+      syncMusic(game);
       const banks = recomputeBanks(snapshot.players, game);
       renderAdminBank("A", banks.A, els.adminBankA);
       renderAdminBank("B", banks.B, els.adminBankB);
@@ -3193,8 +3362,8 @@
       renderMissingAnswers(game);
       renderPlayers();
       renderHistory(game.history || []);
-      els.adminExplanation.closest(".card").classList.toggle("hidden", game.phase !== "leaderboard");
-      if (game.phase === "leaderboard") renderExplanation(els.adminExplanation, game, true);
+      els.adminExplanation.closest(".card").classList.toggle("hidden", !game.showSlides);
+      if (game.showSlides) renderExplanation(els.adminExplanation, game, true);
       renderAdminLeaderboard(game);
     }
 
@@ -3530,13 +3699,14 @@
       ` + explanationTiles(game).map(tile => `
         <div class="projector-tile"><strong>${tile[0]}</strong><p class="lead">${tile[1]}</p></div>
       `).join("");
-      els.projectorExplanationCard.classList.toggle("hidden", game.phase !== "leaderboard");
-      if (game.phase === "leaderboard") renderExplanation(els.projectorExplanation, game);
+      els.projectorExplanationCard.classList.toggle("hidden", !game.showSlides);
+      if (game.showSlides) renderExplanation(els.projectorExplanation, game);
       els.projectorParticipants.innerHTML = participantRows();
       els.projectorLeaderboardCard.classList.toggle("hidden", game.phase !== "leaderboard");
       if (game.phase === "leaderboard") {
         els.projectorLeaderboard.innerHTML = groupedLeaderboardHtml(game, false);
       }
+      syncMusic(game);
     }
 
     function render() {
@@ -3620,6 +3790,12 @@
     els.resumeGame.addEventListener("click", () => setPaused(false));
     els.timedMode.addEventListener("click", () => setAnswerMode(false));
     els.confirmMode.addEventListener("click", () => setAnswerMode(true));
+    els.toggleMusic.addEventListener("click", toggleMusic);
+    els.musicVolume.addEventListener("input", () => {
+      els.musicVolumeLabel.textContent = `${els.musicVolume.value}%`;
+      setLocalMusicVolume(Number(els.musicVolume.value) / 100);
+    });
+    els.musicVolume.addEventListener("change", () => updateMusicVolume(els.musicVolume.value));
     els.adminPrevSlide.addEventListener("click", () => moveExplanationSlide(-1));
     els.adminNextSlide.addEventListener("click", () => moveExplanationSlide(1));
     els.projectorPrevSlide.addEventListener("click", () => moveExplanationSlide(-1));
@@ -3627,6 +3803,7 @@
     els.skipTimer.addEventListener("click", skipTimerNow);
     els.goBack.addEventListener("click", goBackPhase);
     els.endRound.addEventListener("click", endRound);
+    els.toggleSlides.addEventListener("click", toggleSlides);
     els.triggerRumour.addEventListener("click", triggerRumour);
     els.quickFinish.addEventListener("click", startQuickFinish);
     els.endGame.addEventListener("click", endGame);
